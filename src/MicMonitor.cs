@@ -1787,7 +1787,11 @@ namespace MicMonitor
         #endregion
     }
 
-    /// <summary>Builds the application icon at runtime so no external resources are needed.</summary>
+    /// <summary>
+    /// Supplies the window and tray icon. The real multi-size .ico travels as an
+    /// embedded resource so every surface shows exactly the executable's icon;
+    /// the hand-drawn mark is only a fallback.
+    /// </summary>
     internal static class IconFactory
     {
         private static Icon cached;
@@ -1796,6 +1800,24 @@ namespace MicMonitor
         {
             if (cached != null) return cached;
 
+            try
+            {
+                using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("app.ico"))
+                {
+                    if (stream != null)
+                    {
+                        cached = new Icon(stream);
+                        return cached;
+                    }
+                }
+            }
+            catch (Exception) { }
+
+            return DrawFallbackIcon();
+        }
+
+        private static Icon DrawFallbackIcon()
+        {
             using (Bitmap bitmap = new Bitmap(32, 32))
             {
                 using (Graphics g = Graphics.FromImage(bitmap))

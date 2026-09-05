@@ -39,6 +39,7 @@ $output = Join-Path $root 'MicMonitor.exe'
   "/resource:$wvForms,Microsoft.Web.WebView2.WinForms.dll" `
   "/resource:$wvLoader,WebView2Loader.dll" `
   "/resource:$html,app.html" `
+  "/resource:$icon,app.ico" `
   (Join-Path $root 'src\MicMonitor.cs') (Join-Path $root 'src\AssemblyInfo.cs')
 
 if ($LASTEXITCODE -ne 0) { throw "Compilazione fallita (exit $LASTEXITCODE)" }
