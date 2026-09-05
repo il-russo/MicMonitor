@@ -9,3 +9,11 @@ build/*.zip
 # Local test binaries
 build/EngineTest.exe
 build/NAudio.dll
+
+# WebView2 SDK, scaricato da build/fetch-webview2.ps1
+build/webview2/
+build/app.bundle.html
+build/WebViewProbe.exe
+build/probe.log
+build/Microsoft.Web.WebView2.*.dll
+build/WebView2Loader.dll

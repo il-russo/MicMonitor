@@ -1,0 +1,1080 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Mic Flow</title>
+<!--FONTS-->
+<style>
+/* ============================================================
+   Solaris Audio Workstation - design tokens
+   ============================================================ */
+:root{
+  --base:#0c0e12;
+  --panel:#14171f;
+  --card:#1e222d;
+  --hi:#282d3c;
+  --orange:#ff6b00;
+  --ember:#ea580c;
+  --amber:#fbbf24;
+  --red:#ef4444;
+  --green:#22c55e;
+  --slate:#334155;
+  --text:#f1f3f9;
+  --muted:#a8998d;
+  --line:rgba(255,255,255,.06);
+  --line-warm:rgba(255,107,0,.18);
+  --sans:'Plus Jakarta Sans','Segoe UI Variable Text','Segoe UI',sans-serif;
+  --mono:'JetBrains Mono','Cascadia Mono',Consolas,monospace;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--base);
+  color:var(--text);
+  font-family:var(--sans);
+  font-size:13px;
+  overflow:hidden;
+  user-select:none;
+  -webkit-user-select:none;
+}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:var(--base)}
+::-webkit-scrollbar-thumb{background:#2a221b;border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:#453424}
+
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* ============================================================
+   Window chrome
+   ============================================================ */
+#shell{display:flex;flex-direction:column;height:100vh}
+
+#titlebar{
+  height:42px;flex:none;display:flex;align-items:center;gap:10px;padding-left:12px;
+  background:linear-gradient(135deg,rgba(20,23,31,.98),rgba(12,14,18,.99));
+  border-bottom:1px solid var(--line);
+  -webkit-app-region:drag;
+}
+#drag-zone{flex:1;align-self:stretch;display:flex;align-items:center;gap:10px;min-width:0}
+
+.logo{width:26px;height:26px;flex:none;display:grid;place-items:center;border-radius:6px;
+  background:linear-gradient(150deg,rgba(255,107,0,.28),rgba(255,107,0,.05));
+  box-shadow:inset 0 0 0 1px rgba(255,107,0,.35);color:var(--orange)}
+.brand{font-weight:700;font-size:13.5px;letter-spacing:.06em}
+.brand em{font-style:normal;color:var(--orange)}
+
+.chip{
+  font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;
+  background:var(--hi);color:var(--muted);border:1px solid var(--line);white-space:nowrap;
+}
+.chip.live{
+  border-color:rgba(255,107,0,.45);color:var(--orange);background:rgba(255,107,0,.10);
+  display:inline-flex;align-items:center;gap:7px;
+}
+.chip.idle{opacity:.75}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+.dot.pulse{animation:pulse 1.8s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(255,107,0,.55)}50%{opacity:.5;box-shadow:0 0 0 5px rgba(255,107,0,0)}}
+
+#readouts{display:flex;align-items:center;gap:0;margin-right:6px;-webkit-app-region:no-drag}
+#readouts .cell{
+  font-family:var(--mono);font-size:10.5px;padding:5px 11px;color:var(--muted);
+  background:rgba(12,14,18,.75);border:1px solid var(--line);border-right:0;
+}
+#readouts .cell:first-child{border-radius:5px 0 0 5px}
+#readouts .cell:last-child{border-right:1px solid var(--line);border-radius:0 5px 5px 0}
+#readouts .cell b{color:var(--text);font-weight:600}
+
+.winbtns{display:flex;flex:none;-webkit-app-region:no-drag}
+.winbtn{width:46px;height:42px;display:grid;place-items:center;color:#9aa0ab;transition:background .14s,color .14s;cursor:default}
+.winbtn:hover{background:rgba(255,255,255,.07);color:#fff}
+.winbtn.close:hover{background:#c42b1c;color:#fff}
+
+/* tab strip */
+#tabs{
+  height:44px;flex:none;display:flex;align-items:center;gap:4px;padding:0 12px;
+  background:rgba(12,14,18,.6);border-bottom:1px solid var(--line);
+}
+.tab{
+  display:inline-flex;align-items:center;gap:8px;height:30px;padding:0 14px;border-radius:6px;
+  font-size:12.5px;font-weight:600;color:var(--muted);border:1px solid transparent;
+  cursor:default;transition:color .16s,background .16s,border-color .16s;
+}
+.tab:hover{color:var(--text);background:rgba(255,255,255,.04)}
+.tab.active{
+  color:var(--orange);background:rgba(255,107,0,.10);border-color:rgba(255,107,0,.35);
+  box-shadow:0 0 14px -6px rgba(255,107,0,.8);
+}
+#tabs .spacer{flex:1}
+
+/* ============================================================
+   Content
+   ============================================================ */
+#content{flex:1;overflow-y:auto;overflow-x:hidden;padding:14px;display:flex;flex-direction:column;gap:12px}
+
+.card{
+  background:linear-gradient(180deg,rgba(30,34,45,.75),rgba(17,19,23,.9));
+  border:1px solid var(--line-warm);border-radius:8px;
+  box-shadow:0 4px 24px -2px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.05);
+  padding:12px;
+  animation:rise .5s cubic-bezier(.2,.7,.3,1) both;
+}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.card:nth-child(1){animation-delay:.02s}
+.card:nth-child(2){animation-delay:.06s}
+.card:nth-child(3){animation-delay:.10s}
+.card:nth-child(4){animation-delay:.14s}
+
+.sub{background:rgba(12,14,18,.82);border:1px solid var(--line);border-radius:6px}
+
+.card-head{display:flex;align-items:center;gap:9px;margin-bottom:11px}
+.card-head svg{color:var(--orange);flex:none}
+.card-head h2{font-size:14.5px;font-weight:600;letter-spacing:-.01em}
+.card-head .grow{flex:1}
+.tag{
+  font-family:var(--mono);font-size:9px;letter-spacing:.06em;padding:3px 7px;border-radius:4px;
+  background:rgba(255,107,0,.12);color:var(--orange);border:1px solid rgba(255,107,0,.3);
+}
+.tag.amber{background:rgba(251,191,36,.12);color:var(--amber);border-color:rgba(251,191,36,.3)}
+.tag.mute{background:rgba(255,255,255,.05);color:var(--muted);border-color:var(--line)}
+
+.grid{display:grid;gap:12px}
+.g2{grid-template-columns:1fr 1fr}
+@media(max-width:1080px){.g2{grid-template-columns:1fr}}
+
+.label{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;color:var(--muted);text-transform:uppercase}
+
+/* ============================================================
+   Hero / transport
+   ============================================================ */
+#hero{
+  display:flex;gap:12px;align-items:stretch;flex-wrap:wrap;
+  border-color:rgba(255,107,0,.28);
+}
+#hero.on{box-shadow:0 4px 30px -6px rgba(255,107,0,.28), inset 0 1px 0 rgba(255,255,255,.06)}
+
+#power-box{
+  display:flex;align-items:center;gap:14px;min-width:290px;flex:none;
+  padding:12px 14px;border-radius:7px;border:1px solid rgba(255,107,0,.35);
+  background:radial-gradient(120% 140% at 0% 0%, rgba(255,107,0,.13), rgba(12,14,18,.9));
+  transition:border-color .3s, box-shadow .3s;
+}
+#power-box.off{border-color:var(--line);background:rgba(12,14,18,.7)}
+#power-led{
+  width:16px;height:16px;border-radius:50%;flex:none;background:#3a3f4a;transition:.3s;
+}
+#power-box.on #power-led{background:#fff;box-shadow:0 0 16px 3px rgba(255,107,0,.85);animation:breathe 2.4s ease-in-out infinite}
+@keyframes breathe{0%,100%{box-shadow:0 0 16px 3px rgba(255,107,0,.85)}50%{box-shadow:0 0 22px 7px rgba(255,107,0,.45)}}
+#power-text{flex:1;min-width:0}
+#power-title{font-size:15px;font-weight:700;letter-spacing:-.01em;line-height:1.15}
+#power-sub{font-family:var(--mono);font-size:9.5px;color:var(--muted);letter-spacing:.06em;margin-top:4px}
+
+#power-btn{
+  width:46px;height:46px;flex:none;border-radius:50%;display:grid;place-items:center;
+  border:1px solid rgba(255,107,0,.4);background:rgba(255,107,0,.10);color:var(--orange);
+  cursor:pointer;transition:transform .12s, background .2s, box-shadow .25s;
+}
+#power-btn:hover{background:rgba(255,107,0,.2);box-shadow:0 0 20px -4px rgba(255,107,0,.9)}
+#power-btn:active{transform:scale(.94)}
+#power-box.on #power-btn{background:var(--orange);color:#2b1000;border-color:#ff9147;
+  box-shadow:0 0 24px -4px rgba(255,107,0,.95)}
+
+#flow{display:flex;gap:0;flex:1;min-width:320px;border-radius:7px;overflow:hidden;
+  background:rgba(12,14,18,.82);border:1px solid var(--line)}
+#flow .seg{flex:1;padding:11px 14px;border-right:1px solid var(--line);min-width:0}
+#flow .seg:last-child{border-right:0}
+#flow .seg .v{font-family:var(--mono);font-size:12px;color:var(--orange);margin-top:5px;font-weight:600}
+#flow .seg .v.plain{color:var(--text)}
+
+#hero-right{display:flex;flex-direction:column;gap:8px;justify-content:center;flex:none}
+.togglerow{display:flex;gap:8px;flex-wrap:wrap}
+
+.toggle{
+  display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:6px;
+  background:var(--card);border:1px solid var(--line);cursor:pointer;
+  font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--muted);
+  transition:background .16s,border-color .16s,color .16s;white-space:nowrap;
+}
+.toggle:hover{background:var(--hi);color:var(--text)}
+.toggle .box{
+  width:15px;height:15px;border-radius:4px;flex:none;border:1px solid #4b5160;
+  display:grid;place-items:center;transition:.18s;color:transparent;
+}
+.toggle.on{color:var(--text);border-color:rgba(255,107,0,.4)}
+.toggle.on .box{background:var(--orange);border-color:var(--orange);color:#2b1000}
+
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;height:32px;padding:0 13px;
+  border-radius:6px;background:var(--card);border:1px solid var(--line);color:var(--text);
+  font-size:11.5px;font-weight:600;cursor:pointer;
+  transition:background .16s,border-color .16s,transform .1s,box-shadow .2s;white-space:nowrap;
+}
+.btn:hover{background:var(--hi);border-color:rgba(255,255,255,.14)}
+.btn:active{transform:translateY(1px)}
+.btn.accent{background:rgba(255,107,0,.13);border-color:rgba(255,107,0,.4);color:var(--orange)}
+.btn.accent:hover{background:rgba(255,107,0,.22);box-shadow:0 0 16px -5px rgba(255,107,0,.9)}
+.btn[disabled]{opacity:.4;pointer-events:none}
+.btn svg{flex:none}
+.spin{animation:spin .7s linear}
+@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+
+/* ============================================================
+   Device cards
+   ============================================================ */
+.devbox{padding:11px 12px}
+.devrow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+
+select.dev{
+  width:100%;height:36px;padding:0 34px 0 11px;border-radius:6px;color:var(--orange);
+  background:var(--panel);border:1px solid var(--line);
+  font-family:var(--sans);font-size:13.5px;font-weight:600;cursor:pointer;
+  appearance:none;-webkit-appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a8998d' stroke-width='2.5'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat:no-repeat;background-position:right 11px center;
+  transition:border-color .16s, box-shadow .2s;text-overflow:ellipsis;
+}
+select.dev:hover{border-color:rgba(255,107,0,.4)}
+select.dev:focus{outline:none;border-color:var(--orange);box-shadow:0 0 0 2px rgba(255,107,0,.18)}
+select.dev option{background:var(--panel);color:var(--text)}
+select.dev[disabled]{opacity:.55;cursor:not-allowed}
+
+.meta{display:flex;gap:16px;flex-wrap:wrap;margin-top:9px;font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+.meta b{color:var(--text);font-weight:600}
+
+/* stepper */
+.stepper{display:inline-flex;align-items:center;height:32px;border-radius:6px;overflow:hidden;
+  background:var(--panel);border:1px solid var(--line)}
+.stepper button{
+  width:32px;height:30px;background:transparent;border:0;color:var(--muted);font-size:15px;
+  cursor:pointer;transition:background .14s,color .14s;font-family:var(--mono);
+}
+.stepper button:hover{background:rgba(255,107,0,.16);color:var(--orange)}
+.stepper .val{
+  min-width:78px;text-align:center;font-family:var(--mono);font-size:12px;font-weight:600;
+  color:var(--orange);border-left:1px solid var(--line);border-right:1px solid var(--line);
+  padding:0 6px;line-height:30px;transition:color .2s;
+}
+.val.flash{animation:flash .35s ease-out}
+@keyframes flash{from{color:#fff;text-shadow:0 0 10px rgba(255,107,0,.9)}to{}}
+
+/* ============================================================
+   Canvases
+   ============================================================ */
+.canvas-wrap{position:relative;width:100%;border-radius:6px;overflow:hidden;background:rgba(12,14,18,.82);
+  border:1px solid var(--line)}
+canvas{display:block;width:100%}
+.scale-row{display:flex;justify-content:space-between;margin-top:6px;font-family:var(--mono);font-size:8.5px;color:#6b7280}
+
+/* ring gauge */
+#level-body{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+#ring-wrap{position:relative;width:118px;height:118px;flex:none}
+#ring-wrap canvas{width:118px;height:118px}
+#ring-label{position:absolute;inset:0;display:grid;place-content:center;text-align:center;pointer-events:none}
+#ring-pct{font-family:var(--mono);font-size:21px;font-weight:700;letter-spacing:-.02em}
+#ring-db{font-family:var(--mono);font-size:10px;color:var(--orange);margin-top:3px}
+#fader-col{flex:1;min-width:240px}
+
+input[type=range]{
+  -webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:3px;
+  background:var(--slate);outline:none;cursor:pointer;
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:15px;height:15px;border-radius:50%;
+  background:var(--orange);border:2px solid #fff;box-shadow:0 0 10px rgba(255,107,0,.9);cursor:pointer;
+  transition:transform .12s;
+}
+input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.15)}
+input[type=range][disabled]{opacity:.5}
+
+/* buffer presets */
+#buffer-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.preset{
+  padding:9px 6px;border-radius:6px;text-align:center;cursor:pointer;
+  background:var(--panel);border:1px solid var(--line);transition:.16s;
+}
+.preset:hover{background:var(--hi)}
+.preset.on{background:rgba(255,107,0,.12);border-color:rgba(255,107,0,.5);
+  box-shadow:0 0 16px -6px rgba(255,107,0,.9)}
+.preset .ms{font-family:var(--mono);font-size:14px;font-weight:700}
+.preset.on .ms{color:var(--orange)}
+.preset .note{font-family:var(--mono);font-size:8.5px;color:var(--muted);margin-top:4px;letter-spacing:.04em}
+
+/* gate */
+.trio{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:11px}
+.trio .cellbox{padding:9px;border-radius:6px;background:var(--panel);border:1px solid var(--line);text-align:center}
+.trio .cellbox .v{font-family:var(--mono);font-size:13px;font-weight:700;margin-top:5px}
+
+/* status bar */
+#statusbar{
+  height:34px;flex:none;display:flex;align-items:center;gap:18px;padding:0 14px;
+  background:rgba(12,14,18,.92);border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:10.5px;color:var(--muted);
+}
+#statusbar b{color:var(--text);font-weight:600}
+#statusbar .grow{flex:1}
+#load-track{width:74px;height:5px;border-radius:3px;background:var(--slate);overflow:hidden}
+#load-fill{height:100%;width:0;border-radius:3px;background:linear-gradient(90deg,var(--green),var(--amber));transition:width .3s}
+#toast{
+  position:fixed;left:50%;bottom:52px;transform:translate(-50%,20px);opacity:0;pointer-events:none;
+  padding:9px 16px;border-radius:7px;font-size:12px;font-weight:600;
+  background:rgba(30,34,45,.97);border:1px solid rgba(255,107,0,.4);
+  box-shadow:0 10px 30px rgba(0,0,0,.6);transition:opacity .25s, transform .25s;z-index:50;
+}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+#toast.err{border-color:rgba(239,68,68,.55);color:#ffb4ab}
+</style>
+</head>
+<body>
+<div id="shell">
+
+  <!-- ==================== TITLE BAR ==================== -->
+  <div id="titlebar">
+    <div id="drag-zone" data-drag>
+      <span class="logo">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/>
+        </svg>
+      </span>
+      <span class="brand">MIC<em>FLOW</em></span>
+      <span class="chip">WASAPI Host</span>
+      <span class="chip idle live" id="state-pill"><i class="dot"></i><span id="state-pill-text">STANDBY</span></span>
+    </div>
+
+    <div id="readouts">
+      <span class="cell" id="ro-mode">WASAPI Shared</span>
+      <span class="cell"><b id="ro-rate">--</b></span>
+      <span class="cell"><b id="ro-buffer">--</b></span>
+    </div>
+
+    <div class="winbtns">
+      <span class="winbtn" data-win="min" title="Riduci a icona">
+        <svg width="11" height="11" viewBox="0 0 12 12"><path d="M1 6h10" stroke="currentColor" stroke-width="1.2"/></svg>
+      </span>
+      <span class="winbtn" data-win="max" title="Ingrandisci">
+        <svg width="11" height="11" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+      </span>
+      <span class="winbtn close" data-win="close" title="Chiudi">
+        <svg width="11" height="11" viewBox="0 0 12 12"><path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" stroke-width="1.2"/></svg>
+      </span>
+    </div>
+  </div>
+
+  <!-- ==================== TABS ==================== -->
+  <div id="tabs">
+    <span class="tab active" data-tab="monitor">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M3 12h3l3-7 4 14 3-9h5"/></svg>
+      Monitoraggio Diretto
+    </span>
+    <span class="tab" data-tab="settings">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
+      Impostazioni
+    </span>
+    <span class="spacer"></span>
+    <span class="chip" id="driver-chip">Nessun driver virtuale</span>
+  </div>
+
+  <!-- ==================== CONTENT ==================== -->
+  <div id="content">
+
+    <!-- ---------- hero ---------- -->
+    <div class="card" id="hero">
+      <div id="power-box" class="off">
+        <span id="power-led"></span>
+        <span id="power-text">
+          <div id="power-title">IN PAUSA</div>
+          <div id="power-sub">PASSTHROUGH DIRETTO</div>
+        </span>
+        <button id="power-btn" title="Avvia / ferma l'ascolto">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+            <path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>
+        </button>
+      </div>
+
+      <div id="flow">
+        <div class="seg">
+          <div class="label">Flusso audio</div>
+          <div class="v" id="flow-format">--</div>
+        </div>
+        <div class="seg">
+          <div class="label">Buffer richiesto</div>
+          <div class="v" id="flow-buffer">--</div>
+        </div>
+        <div class="seg">
+          <div class="label">Integrità stream</div>
+          <div class="v plain" id="flow-health">In attesa</div>
+        </div>
+      </div>
+
+      <div id="hero-right">
+        <div class="togglerow">
+          <span class="toggle" data-toggle="limiter" title="Limita i picchi invece di tagliarli">
+            <span class="box"><svg width="10" height="10" viewBox="0 0 12 12"><path d="M1.5 6.2l3 3 6-6.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+            LIMITER
+          </span>
+          <span class="toggle" data-toggle="startup">
+            <span class="box"><svg width="10" height="10" viewBox="0 0 12 12"><path d="M1.5 6.2l3 3 6-6.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+            AVVIO CON WINDOWS
+          </span>
+          <span class="toggle" data-toggle="tray">
+            <span class="box"><svg width="10" height="10" viewBox="0 0 12 12"><path d="M1.5 6.2l3 3 6-6.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+            SYSTEM TRAY
+          </span>
+        </div>
+        <div class="togglerow">
+          <span class="toggle" data-toggle="autostart">
+            <span class="box"><svg width="10" height="10" viewBox="0 0 12 12"><path d="M1.5 6.2l3 3 6-6.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+            AVVIA ASCOLTO ALL'APERTURA
+          </span>
+          <button class="btn accent" id="btn-rescan">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" id="rescan-ico">
+              <path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+            RE-SYNC I/O
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- devices ---------- -->
+    <div class="grid g2">
+      <div class="card">
+        <div class="card-head">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8.5 21h7"/></svg>
+          <h2>Sorgente Microfono</h2>
+          <span class="tag" id="src-tag">INGRESSO</span>
+          <span class="grow"></span>
+          <span class="tag mute" id="src-role">--</span>
+        </div>
+
+        <div class="sub devbox">
+          <div class="label">Dispositivo di acquisizione</div>
+          <div style="margin-top:7px"><select class="dev" id="sel-input"></select></div>
+          <div class="meta">
+            <span>Frequenza <b id="src-rate">--</b></span>
+            <span>Canali <b id="src-ch">--</b></span>
+            <span>Formato <b id="src-fmt">--</b></span>
+          </div>
+        </div>
+
+        <div class="devrow" style="margin-top:11px;margin-bottom:0">
+          <span class="label">Guadagno preamp</span>
+          <span class="stepper">
+            <button data-gain="-1" title="Meno 1 dB">−</button>
+            <span class="val mono" id="gain-val">0.0 dB</span>
+            <button data-gain="1" title="Più 1 dB">+</button>
+          </span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="2" y="14" width="5" height="7" rx="2"/><rect x="17" y="14" width="5" height="7" rx="2"/></svg>
+          <h2>Destinazione Ascolto</h2>
+          <span class="tag amber">CUFFIE</span>
+          <span class="grow"></span>
+          <span class="tag mute" id="dst-role">--</span>
+        </div>
+
+        <div class="sub devbox">
+          <div class="label">Terminale di riproduzione</div>
+          <div style="margin-top:7px"><select class="dev" id="sel-output"></select></div>
+          <div class="meta">
+            <span>Frequenza <b id="dst-rate">--</b></span>
+            <span>Canali <b id="dst-ch">--</b></span>
+            <span>Mix <b>Mono → L+R</b></span>
+          </div>
+        </div>
+
+        <div class="devrow" style="margin-top:11px;margin-bottom:0">
+          <span class="label">Usa le cuffie: gli altoparlanti creano feedback</span>
+          <button class="btn" id="btn-mute">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" id="mute-ico">
+              <path d="M11 5L6 9H3v6h3l5 4V5z"/><path d="M16 9.5a4 4 0 0 1 0 5"/></svg>
+            <span id="mute-text">MUTO CUFFIE</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- meters + controls ---------- -->
+    <div class="grid g2">
+      <div style="display:flex;flex-direction:column;gap:12px">
+
+        <div class="card">
+          <div class="card-head">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M3 12h3l3-7 4 14 3-9h5"/></svg>
+            <h2>Spettro in Tempo Reale</h2>
+            <span class="tag">1024-PT FFT</span>
+            <span class="grow"></span>
+            <span class="label" id="fft-peak">--</span>
+          </div>
+          <div class="canvas-wrap"><canvas id="fft" height="196"></canvas></div>
+          <div class="scale-row">
+            <span>50 Hz</span><span>200 Hz</span><span>1 kHz</span><span>4 kHz</span><span>10 kHz</span><span>20 kHz</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M4 20V10M10 20V4M16 20v-8M22 20v-4"/></svg>
+            <h2>VU Meter Stereo</h2>
+            <span class="grow"></span>
+            <span class="chip" id="vu-l">L --</span>
+            <span class="chip" id="vu-r">R --</span>
+            <span class="chip" id="vu-rms">RMS --</span>
+            <button class="btn" id="btn-reset-peak" style="height:26px;padding:0 10px;font-size:10.5px">RESET</button>
+          </div>
+          <div class="canvas-wrap"><canvas id="vu" height="118"></canvas></div>
+          <div class="scale-row" style="margin-top:8px">
+            <span>Correlazione fase <b class="mono" id="vu-corr" style="color:var(--text)">--</b></span>
+            <span>Rumore di fondo <b class="mono" id="vu-floor" style="color:var(--text)">--</b></span>
+          </div>
+        </div>
+
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+
+        <div class="card">
+          <div class="card-head">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M11 5L6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+            <h2>Livello Monitoraggio</h2>
+          </div>
+          <div id="level-body">
+            <div id="ring-wrap">
+              <canvas id="ring" width="118" height="118"></canvas>
+              <div id="ring-label">
+                <div id="ring-pct">100%</div>
+                <div id="ring-db">0.0 dB</div>
+              </div>
+            </div>
+            <div id="fader-col">
+              <div class="devrow"><span class="label">Fader master</span>
+                <span class="mono" style="font-size:11px;color:var(--orange)" id="fader-val">100%</span></div>
+              <input type="range" id="fader" min="0" max="200" value="100">
+              <div class="scale-row"><span>−∞ Muto</span><span>−20 dB</span><span>−6 dB</span><span style="color:var(--orange)">0 dB</span><span>+6 dB</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M13 2L4.5 13H11l-1 9 8.5-11H12l1-9z"/></svg>
+            <h2>Latenza & Buffer</h2>
+            <span class="grow"></span>
+            <span class="tag" id="lat-tag">--</span>
+          </div>
+          <div id="buffer-grid">
+            <div class="preset" data-ms="5"><div class="ms mono">5 ms</div><div class="note">CPU ALTA</div></div>
+            <div class="preset" data-ms="10"><div class="ms mono">10 ms</div><div class="note">REATTIVO</div></div>
+            <div class="preset on" data-ms="25"><div class="ms mono">25 ms</div><div class="note">CONSIGLIATO</div></div>
+            <div class="preset" data-ms="50"><div class="ms mono">50 ms</div><div class="note">SICURO</div></div>
+          </div>
+          <div style="margin-top:11px">
+            <div class="devrow"><span class="label">Regolazione fine</span>
+              <span class="mono" style="font-size:11px;color:var(--orange)" id="lat-val">25 ms</span></div>
+            <input type="range" id="latency" min="5" max="120" value="25">
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M3 4h18l-7 8v7l-4 2v-9L3 4z"/></svg>
+            <h2>Noise Gate</h2>
+            <span class="grow"></span>
+            <span class="tag mute" id="gate-state">SPENTO</span>
+          </div>
+          <div class="devrow"><span class="label">Soglia di chiusura</span>
+            <span class="mono" style="font-size:11px;color:var(--orange)" id="gate-val">OFF</span></div>
+          <input type="range" id="gate" min="0" max="50" value="0">
+          <div class="scale-row"><span>OFF</span><span>−70 dB</span><span>−52 dB</span><span>−38 dB</span><span>−25 dB</span></div>
+          <div class="trio">
+            <div class="cellbox"><div class="label">Attacco</div><div class="v mono" style="color:var(--amber)">3 ms</div></div>
+            <div class="cellbox"><div class="label">Rilascio</div><div class="v mono" style="color:var(--amber)">120 ms</div></div>
+            <div class="cellbox"><div class="label">Riduzione</div><div class="v mono" id="gate-gr" style="color:var(--orange)">0 dB</div></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== STATUS BAR ==================== -->
+  <div id="statusbar">
+    <span>Carico DSP</span>
+    <span id="load-track"><span id="load-fill"></span></span>
+    <b id="load-val">0%</b>
+    <span>·</span>
+    <span>Buffer <b id="sb-buffer">--</b></span>
+    <span>·</span>
+    <span>Interruzioni <b id="sb-drops">0</b></span>
+    <span class="grow"></span>
+    <span id="sb-msg">Pronto</span>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+/* ============================================================
+   Bridge - talks to the C# host, or fakes data in a browser
+   ============================================================ */
+const BRIDGE = !!(window.chrome && window.chrome.webview);
+function send(msg){ if(BRIDGE) window.chrome.webview.postMessage(JSON.stringify(msg)); }
+
+const $ = function(id){ return document.getElementById(id); };
+
+let toastTimer = null;
+function toast(text, isError){
+  const t = $('toast');
+  t.textContent = text;
+  t.className = 'show' + (isError ? ' err' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function(){ t.className = ''; }, 2600);
+}
+
+/* ============================================================
+   Window chrome
+   ============================================================ */
+document.querySelectorAll('[data-win]').forEach(function(el){
+  el.addEventListener('click', function(){ send({cmd:'window', action: el.dataset.win}); });
+});
+$('drag-zone').addEventListener('mousedown', function(e){
+  if(e.button === 0 && !e.target.closest('#readouts')) send({cmd:'window', action:'drag'});
+});
+$('drag-zone').addEventListener('dblclick', function(){ send({cmd:'window', action:'max'}); });
+
+document.querySelectorAll('.tab').forEach(function(tab){
+  tab.addEventListener('click', function(){
+    if(tab.classList.contains('active')) return;
+    document.querySelector('.tab.active').classList.remove('active');
+    tab.classList.add('active');
+    if(tab.dataset.tab === 'settings') toast('Le impostazioni sono già tutte qui nella schermata principale');
+  });
+});
+
+/* ============================================================
+   Controls
+   ============================================================ */
+$('power-btn').addEventListener('click', function(){ send({cmd:'power'}); });
+$('btn-rescan').addEventListener('click', function(){
+  const ico = $('rescan-ico');
+  ico.classList.remove('spin'); void ico.offsetWidth; ico.classList.add('spin');
+  send({cmd:'rescan'});
+});
+$('btn-mute').addEventListener('click', function(){ send({cmd:'mute'}); });
+$('btn-reset-peak').addEventListener('click', function(){ resetPeaks(); send({cmd:'resetPeak'}); });
+
+$('sel-input').addEventListener('change', function(){ send({cmd:'setInput', id:this.value}); });
+$('sel-output').addEventListener('change', function(){ send({cmd:'setOutput', id:this.value}); });
+
+document.querySelectorAll('[data-gain]').forEach(function(b){
+  b.addEventListener('click', function(){ send({cmd:'nudgeGain', delta: parseInt(b.dataset.gain, 10)}); });
+});
+
+document.querySelectorAll('[data-toggle]').forEach(function(el){
+  el.addEventListener('click', function(){
+    send({cmd:'toggle', name: el.dataset.toggle, value: !el.classList.contains('on')});
+  });
+});
+
+$('fader').addEventListener('input', function(){
+  paintFader(parseInt(this.value, 10));
+  send({cmd:'setVolume', value: parseInt(this.value, 10)});
+});
+$('latency').addEventListener('input', function(){
+  paintLatency(parseInt(this.value, 10));
+});
+$('latency').addEventListener('change', function(){
+  send({cmd:'setLatency', value: parseInt(this.value, 10)});
+});
+$('gate').addEventListener('input', function(){
+  paintGate(parseInt(this.value, 10));
+  send({cmd:'setGate', value: parseInt(this.value, 10)});
+});
+document.querySelectorAll('.preset').forEach(function(p){
+  p.addEventListener('click', function(){
+    const ms = parseInt(p.dataset.ms, 10);
+    $('latency').value = ms;
+    paintLatency(ms);
+    send({cmd:'setLatency', value: ms});
+  });
+});
+
+/* ============================================================
+   Painting helpers
+   ============================================================ */
+function flash(el){ el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+
+function paintFader(v){
+  $('fader-val').textContent = v + '%';
+  $('ring-pct').textContent = v + '%';
+  const db = v <= 0 ? -Infinity : 20 * Math.log10(v / 100);
+  $('ring-db').textContent = v <= 0 ? '−∞ dB' : (db >= 0 ? '+' : '') + db.toFixed(1) + ' dB';
+  ringTarget = Math.min(1, v / 200);
+}
+function paintLatency(ms){
+  $('lat-val').textContent = ms + ' ms';
+  $('lat-tag').textContent = ms + ' MS';
+  document.querySelectorAll('.preset').forEach(function(p){
+    p.classList.toggle('on', parseInt(p.dataset.ms, 10) === ms);
+  });
+}
+function paintGate(v){
+  const off = v <= 0;
+  const db = -70 + (v / 50) * 45;
+  $('gate-val').textContent = off ? 'OFF' : db.toFixed(0) + ' dB';
+  $('gate-state').textContent = off ? 'SPENTO' : 'ATTIVO';
+  $('gate-state').className = off ? 'tag mute' : 'tag';
+}
+
+/* ============================================================
+   FFT canvas
+   ============================================================ */
+const fftCanvas = $('fft'), fftCtx = fftCanvas.getContext('2d');
+let spectrum = new Float32Array(72);
+let spectrumShown = new Float32Array(72);
+
+function sizeCanvas(c){
+  // The logical height lives in data-h: the height attribute is the pixel
+  // buffer and gets overwritten on every resize.
+  if(!c.dataset.h) c.dataset.h = c.getAttribute('height');
+  const ratio = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = parseInt(c.dataset.h, 10);
+  const bw = Math.round(w * ratio), bh = Math.round(h * ratio);
+  const ctx = c.getContext('2d');
+  if(c.width !== bw || c.height !== bh){
+    c.width = bw;
+    c.height = bh;
+    c.style.height = h + 'px';
+  }
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  return {w: w, h: h};
+}
+
+function drawFft(){
+  const size = sizeCanvas(fftCanvas), w = size.w, h = size.h;
+  const ctx = fftCtx;
+  ctx.clearRect(0, 0, w, h);
+
+  ctx.strokeStyle = 'rgba(255,255,255,.05)';
+  ctx.lineWidth = 1;
+  for(let i = 1; i < 6; i++){
+    const x = Math.round(w * i / 6) + .5;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+  }
+  for(let i = 1; i < 4; i++){
+    const y = Math.round(h * i / 4) + .5;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+
+  const n = spectrumShown.length;
+  const pts = [];
+  for(let i = 0; i < n; i++){
+    pts.push([w * i / (n - 1), h - Math.max(0, Math.min(1, spectrumShown[i])) * (h - 6) - 3]);
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for(let i = 0; i < n - 1; i++){
+    const cx = (pts[i][0] + pts[i + 1][0]) / 2;
+    ctx.bezierCurveTo(cx, pts[i][1], cx, pts[i + 1][1], pts[i + 1][0], pts[i + 1][1]);
+  }
+
+  const line = ctx.getLineDash();
+  ctx.save();
+  ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath();
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, 'rgba(255,107,0,.85)');
+  grad.addColorStop(.55, 'rgba(234,88,12,.35)');
+  grad.addColorStop(1, 'rgba(251,191,36,.04)');
+  ctx.fillStyle = grad;
+  ctx.fill();
+  ctx.restore();
+
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for(let i = 0; i < n - 1; i++){
+    const cx = (pts[i][0] + pts[i + 1][0]) / 2;
+    ctx.bezierCurveTo(cx, pts[i][1], cx, pts[i + 1][1], pts[i + 1][0], pts[i + 1][1]);
+  }
+  ctx.strokeStyle = '#ffb693';
+  ctx.lineWidth = 1.6;
+  ctx.shadowColor = 'rgba(255,107,0,.9)';
+  ctx.shadowBlur = 8;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.setLineDash(line);
+}
+
+/* ============================================================
+   VU canvas
+   ============================================================ */
+const vuCanvas = $('vu'), vuCtx = vuCanvas.getContext('2d');
+const TICKS = [-60, -48, -36, -24, -18, -12, -6, -3, 0];
+let vu = {l: -90, r: -90, rms: -90, peakL: -90, peakR: -90};
+let vuShown = {l: 0, r: 0};
+
+function dbToX(db, w){
+  const x = (db + 66) / 66;
+  return Math.max(0, Math.min(1, x)) * w;
+}
+function resetPeaks(){ vu.peakL = -90; vu.peakR = -90; }
+
+function drawVu(){
+  const size = sizeCanvas(vuCanvas), w = size.w, h = size.h;
+  const ctx = vuCtx;
+  ctx.clearRect(0, 0, w, h);
+
+  const left = 22, right = w - 8, trackW = right - left;
+
+  ctx.font = '9px "JetBrains Mono", monospace';
+  ctx.fillStyle = '#6b7280';
+  ctx.textAlign = 'center';
+  for(let i = 0; i < TICKS.length; i++){
+    const x = left + dbToX(TICKS[i], trackW);
+    ctx.fillText(String(TICKS[i]), x, 11);
+    ctx.strokeStyle = 'rgba(255,255,255,.07)';
+    ctx.beginPath(); ctx.moveTo(x + .5, 16); ctx.lineTo(x + .5, h - 6); ctx.stroke();
+  }
+
+  drawBar('L', vuShown.l, vu.peakL, 24);
+  drawBar('R', vuShown.r, vu.peakR, 62);
+
+  function drawBar(name, db, peak, y){
+    const barH = 26;
+    ctx.fillStyle = '#0b0d11';
+    roundRect(ctx, left, y, trackW, barH, 3); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.06)';
+    roundRect(ctx, left + .5, y + .5, trackW - 1, barH - 1, 3); ctx.stroke();
+
+    ctx.fillStyle = '#8b93a1';
+    ctx.font = '600 10px "JetBrains Mono", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(name, 4, y + barH / 2 + 3.5);
+
+    const width = dbToX(db, trackW);
+    if(width > 1){
+      const grad = ctx.createLinearGradient(left, 0, right, 0);
+      grad.addColorStop(0, '#22c55e');
+      grad.addColorStop(.62, '#fbbf24');
+      grad.addColorStop(.88, '#ff6b00');
+      grad.addColorStop(1, '#ef4444');
+      ctx.save();
+      roundRect(ctx, left, y, width, barH, 3); ctx.clip();
+      ctx.fillStyle = grad;
+      ctx.fillRect(left, y, trackW, barH);
+      ctx.restore();
+    }
+
+    if(peak > -80){
+      const px = left + dbToX(peak, trackW);
+      ctx.fillStyle = peak >= -1 ? '#ef4444' : '#ffffff';
+      ctx.fillRect(px - 1, y + 2, 2, barH - 4);
+    }
+  }
+}
+
+function roundRect(ctx, x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/* ============================================================
+   Ring gauge
+   ============================================================ */
+const ringCanvas = $('ring'), ringCtx = ringCanvas.getContext('2d');
+let ringTarget = .5, ringShown = .5;
+
+function drawRing(){
+  const ratio = window.devicePixelRatio || 1;
+  if(ringCanvas.width !== 118 * ratio){
+    ringCanvas.width = 118 * ratio; ringCanvas.height = 118 * ratio;
+    ringCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  }
+  const ctx = ringCtx, c = 59, r = 46;
+  ctx.clearRect(0, 0, 118, 118);
+
+  const start = Math.PI * .75, sweep = Math.PI * 1.5;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 9;
+  ctx.strokeStyle = '#232936';
+  ctx.beginPath(); ctx.arc(c, c, r, start, start + sweep); ctx.stroke();
+
+  const grad = ctx.createLinearGradient(0, 0, 118, 118);
+  grad.addColorStop(0, '#ea580c');
+  grad.addColorStop(1, '#ff9147');
+  ctx.strokeStyle = grad;
+  ctx.shadowColor = 'rgba(255,107,0,.75)';
+  ctx.shadowBlur = 12;
+  ctx.beginPath(); ctx.arc(c, c, r, start, start + sweep * Math.max(.001, ringShown)); ctx.stroke();
+  ctx.shadowBlur = 0;
+}
+
+/* ============================================================
+   Animation loop
+   ============================================================ */
+function frame(){
+  for(let i = 0; i < spectrum.length; i++){
+    const target = spectrum[i];
+    spectrumShown[i] += (target - spectrumShown[i]) * (target > spectrumShown[i] ? .55 : .12);
+  }
+  vuShown.l += (vu.l - vuShown.l) * (vu.l > vuShown.l ? .8 : .16);
+  vuShown.r += (vu.r - vuShown.r) * (vu.r > vuShown.r ? .8 : .16);
+  ringShown += (ringTarget - ringShown) * .18;
+
+  drawFft(); drawVu(); drawRing();
+  requestAnimationFrame(frame);
+}
+
+/* ============================================================
+   Telemetry from the host
+   ============================================================ */
+function fmtDb(v){
+  if(v === null || v === undefined || v <= -89) return '−∞';
+  return (v > 0 ? '+' : '') + v.toFixed(1);
+}
+
+function applyState(s){
+  const on = !!s.running;
+
+  $('power-box').className = on ? 'on' : 'off';
+  $('hero').classList.toggle('on', on);
+  $('power-title').textContent = on ? 'IN ASCOLTO' : 'IN PAUSA';
+  $('power-sub').textContent = on ? 'PASSTHROUGH DIRETTO ATTIVO' : 'PASSTHROUGH DIRETTO';
+  $('state-pill-text').textContent = on ? 'ASCOLTO ATTIVO' : 'STANDBY';
+  $('state-pill').className = 'chip live' + (on ? '' : ' idle');
+  $('state-pill').querySelector('.dot').className = on ? 'dot pulse' : 'dot';
+
+  if(s.devices){
+    fillSelect($('sel-input'), s.devices.inputs, s.inputId);
+    fillSelect($('sel-output'), s.devices.outputs, s.outputId);
+  }
+  $('sel-input').disabled = on;
+  $('sel-output').disabled = on;
+
+  $('src-rate').textContent = s.inRate ? (s.inRate / 1000).toFixed(1) + ' kHz' : '--';
+  $('src-ch').textContent = s.inChannels || '--';
+  $('src-fmt').textContent = s.inBits ? s.inBits + ' bit float' : '--';
+  $('src-role').textContent = s.inDefault ? 'PREDEFINITO' : 'MANUALE';
+  $('dst-rate').textContent = s.outRate ? (s.outRate / 1000).toFixed(1) + ' kHz' : '--';
+  $('dst-ch').textContent = s.outChannels || '--';
+  $('dst-role').textContent = s.outDefault ? 'PREDEFINITO' : 'MANUALE';
+
+  $('ro-rate').textContent = s.inRate ? (s.inRate / 1000).toFixed(1) + ' kHz' : '--';
+  $('ro-buffer').textContent = s.latency + ' ms';
+  $('sb-buffer').textContent = s.latency + ' ms';
+  $('flow-format').textContent = s.inRate
+    ? (s.inRate / 1000).toFixed(1) + ' kHz · ' + s.inChannels + ' ch'
+    : 'in attesa';
+  $('flow-buffer').textContent = s.latency + ' ms (WASAPI shared)';
+  $('flow-health').textContent = on ? (s.dropouts > 0 ? s.dropouts + ' interruzioni' : 'Stabile') : 'In attesa';
+
+  const gainText = (s.gainDb > 0 ? '+' : '') + s.gainDb.toFixed(1) + ' dB';
+  if($('gain-val').textContent !== gainText){ $('gain-val').textContent = gainText; flash($('gain-val')); }
+
+  if(document.activeElement !== $('fader')){ $('fader').value = s.volume; }
+  paintFader(s.volume);
+  if(document.activeElement !== $('latency')){ $('latency').value = s.latency; }
+  paintLatency(s.latency);
+  if(document.activeElement !== $('gate')){ $('gate').value = s.gate; }
+  paintGate(s.gate);
+
+  setToggle('limiter', s.limiter);
+  setToggle('startup', s.startup);
+  setToggle('tray', s.tray);
+  setToggle('autostart', s.autostart);
+
+  $('mute-text').textContent = s.muted ? 'CUFFIE MUTE' : 'MUTO CUFFIE';
+  $('btn-mute').classList.toggle('accent', !!s.muted);
+
+  if(s.message) $('sb-msg').textContent = s.message;
+}
+
+function setToggle(name, value){
+  const el = document.querySelector('[data-toggle="' + name + '"]');
+  if(el) el.classList.toggle('on', !!value);
+}
+
+function fillSelect(sel, items, selectedId){
+  const signature = items.map(function(i){ return i.id; }).join('|');
+  if(sel.dataset.sig !== signature){
+    sel.innerHTML = '';
+    items.forEach(function(item){
+      const o = document.createElement('option');
+      o.value = item.id;
+      o.textContent = item.name + (item.def ? '  ·  predefinito' : '');
+      sel.appendChild(o);
+    });
+    sel.dataset.sig = signature;
+  }
+  if(selectedId) sel.value = selectedId;
+}
+
+function applyMeters(m){
+  vu.l = m.peakL; vu.r = m.peakR; vu.rms = m.rms;
+  if(m.peakL > vu.peakL) vu.peakL = m.peakL;
+  if(m.peakR > vu.peakR) vu.peakR = m.peakR;
+
+  $('vu-l').textContent = 'L ' + fmtDb(m.peakL) + ' dB';
+  $('vu-r').textContent = 'R ' + fmtDb(m.peakR) + ' dB';
+  $('vu-rms').textContent = 'RMS ' + fmtDb(m.rms) + ' dB';
+  $('vu-corr').textContent = (m.corr >= 0 ? '+' : '') + m.corr.toFixed(2);
+  $('vu-floor').textContent = fmtDb(m.floor) + ' dBFS';
+  $('gate-gr').textContent = m.gr <= 0.1 ? '0 dB' : '−' + m.gr.toFixed(0) + ' dB';
+
+  if(m.bands) for(let i = 0; i < spectrum.length && i < m.bands.length; i++) spectrum[i] = m.bands[i];
+  $('fft-peak').textContent = m.dominant > 0 ? Math.round(m.dominant) + ' Hz dominante' : '--';
+
+  $('load-fill').style.width = Math.min(100, m.load) + '%';
+  $('load-val').textContent = Math.round(m.load) + '%';
+  $('sb-drops').textContent = m.drops;
+}
+
+if(BRIDGE){
+  window.chrome.webview.addEventListener('message', function(e){
+    const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+    if(data.type === 'state') applyState(data);
+    else if(data.type === 'meters') applyMeters(data);
+    else if(data.type === 'toast') toast(data.text, data.error);
+  });
+  send({cmd:'ready'});
+}else{
+  // Standalone preview in a browser: synthetic data so the layout can be checked.
+  applyState({running:true, volume:100, latency:25, gate:0, gainDb:0, limiter:true, startup:false,
+    tray:true, autostart:false, muted:false, inRate:48000, inChannels:2, inBits:32, outRate:48000,
+    outChannels:2, inDefault:true, outDefault:true, dropouts:0, message:'Anteprima nel browser',
+    devices:{inputs:[{id:'a',name:'Microfono TONOR TC320 USB',def:true}],
+             outputs:[{id:'b',name:'Cuffie G435 Wireless',def:true}]}, inputId:'a', outputId:'b'});
+  setInterval(function(){
+    const bands = [];
+    for(let i = 0; i < 72; i++){
+      const t = i / 72;
+      bands.push(Math.max(0, (Math.sin(t * 7 + Date.now() / 700) * .3 + .45) * (1 - t * .7) + Math.random() * .08));
+    }
+    applyMeters({peakL:-6 - Math.random() * 12, peakR:-7 - Math.random() * 12, rms:-19, corr:.94,
+      floor:-72, gr:0, bands:bands, dominant:1240, load:14, drops:0});
+  }, 60);
+}
+
+window.addEventListener('resize', function(){ drawFft(); drawVu(); });
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

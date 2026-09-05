@@ -1,19 +1,16 @@
-﻿// MicMonitor - lightweight microphone monitoring for Windows.
+// Mic Flow - real-time microphone monitoring for Windows.
 //
 // Routes the selected capture device straight to the selected playback device
 // using WASAPI shared mode. No virtual audio driver is installed, so other
 // applications (Discord, OBS, games) keep receiving the untouched microphone
 // signal exactly as they did before this app was running.
 //
-// The interface follows the "rack unit" skin described in design/skin.html:
-// a graphite chassis with recessed panels, engraved mono labels and a teal
-// signal path. Everything is drawn with GDI+, no external resources.
+// The interface is an embedded HTML page rendered by WebView2; this file is
+// the host: window chrome, audio engine and the JSON bridge between them.
 
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
@@ -21,7 +18,10 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Web.Script.Serialization;
 using System.Windows.Forms;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Win32;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
@@ -39,6 +39,9 @@ namespace MicMonitor
 
         [DllImport("user32.dll")]
         private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr LoadLibrary(string path);
 
         private static readonly IntPtr HwndBroadcast = new IntPtr(0xffff);
 
@@ -59,6 +62,8 @@ namespace MicMonitor
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
 
+                if (!PrepareNativeLoader()) return;
+
                 bool startHidden = false;
                 foreach (string arg in args)
                 {
@@ -70,20 +75,86 @@ namespace MicMonitor
             }
         }
 
-        // Kept out of Main so the JIT does not need to load NAudio before the
-        // assembly resolver above is installed.
+        /// <summary>
+        /// WebView2's managed layer P/Invokes WebView2Loader.dll. The DLL travels
+        /// inside this executable, so it is unpacked next to the user profile and
+        /// pre-loaded before any WebView2 type is touched.
+        /// </summary>
+        private static bool PrepareNativeLoader()
+        {
+            try
+            {
+                string folder = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "MicMonitor", "runtime");
+                Directory.CreateDirectory(folder);
+                string target = Path.Combine(folder, "WebView2Loader.dll");
+
+                using (Stream stream = Assembly.GetExecutingAssembly()
+                           .GetManifestResourceStream("WebView2Loader.dll"))
+                {
+                    if (stream == null) throw new FileNotFoundException("WebView2Loader.dll mancante nelle risorse");
+
+                    byte[] payload = new byte[stream.Length];
+                    int read = 0;
+                    while (read < payload.Length)
+                    {
+                        int chunk = stream.Read(payload, read, payload.Length - read);
+                        if (chunk <= 0) break;
+                        read += chunk;
+                    }
+
+                    bool needsWrite = true;
+                    if (File.Exists(target))
+                    {
+                        try { needsWrite = new FileInfo(target).Length != payload.Length; }
+                        catch (Exception) { needsWrite = true; }
+                    }
+                    if (needsWrite) File.WriteAllBytes(target, payload);
+                }
+
+                if (LoadLibrary(target) == IntPtr.Zero)
+                {
+                    throw new Exception("LoadLibrary ha restituito 0 (errore " +
+                        Marshal.GetLastWin32Error().ToString(CultureInfo.InvariantCulture) + ")");
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "Impossibile preparare il componente WebView2.\r\n\r\n" + ex.Message,
+                    "Mic Flow", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+        }
+
+        // Kept out of Main so the JIT does not need to load the referenced
+        // assemblies before the resolver above is installed.
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static void RunApplication(bool startHidden)
         {
             Application.Run(new MainForm(startHidden));
         }
 
+        private static readonly string[] EmbeddedAssemblies =
+        {
+            "NAudio",
+            "Microsoft.Web.WebView2.Core",
+            "Microsoft.Web.WebView2.WinForms"
+        };
+
         private static Assembly ResolveEmbedded(object sender, ResolveEventArgs e)
         {
             string simpleName = new AssemblyName(e.Name).Name;
-            if (simpleName != "NAudio") return null;
+            bool known = false;
+            foreach (string candidate in EmbeddedAssemblies)
+            {
+                if (candidate == simpleName) { known = true; break; }
+            }
+            if (!known) return null;
 
-            using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("NAudio.dll"))
+            using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(simpleName + ".dll"))
             {
                 if (stream == null) return null;
                 byte[] raw = new byte[stream.Length];
@@ -99,738 +170,225 @@ namespace MicMonitor
         }
     }
 
-    #region Theme
+    #region Signal analysis
 
-    internal static class Theme
+    /// <summary>Iterative radix-2 FFT over a power-of-two buffer.</summary>
+    internal static class Fft
     {
-        public static readonly Color ChassisTop = Color.FromArgb(0x17, 0x1B, 0x21);
-        public static readonly Color ChassisBottom = Color.FromArgb(0x0E, 0x11, 0x16);
-        public static readonly Color TitleTop = Color.FromArgb(0x25, 0x2B, 0x33);
-        public static readonly Color TitleBottom = Color.FromArgb(0x1B, 0x20, 0x27);
-        public static readonly Color Panel = Color.FromArgb(0x1C, 0x21, 0x29);
-        public static readonly Color Well = Color.FromArgb(0x0A, 0x0D, 0x11);
-        public static readonly Color Shadow = Color.FromArgb(0x0A, 0x0D, 0x10);
-        public static readonly Color Edge = Color.FromArgb(0x2B, 0x32, 0x3B);
-        public static readonly Color EdgeSoft = Color.FromArgb(0x22, 0x28, 0x30);
-        public static readonly Color Highlight = Color.FromArgb(0x3C, 0x45, 0x52);
-
-        public static readonly Color Text = Color.FromArgb(0xE6, 0xEA, 0xF0);
-        public static readonly Color TextSoft = Color.FromArgb(0xC9, 0xD2, 0xDE);
-        public static readonly Color Dim = Color.FromArgb(0x7C, 0x85, 0x93);
-        public static readonly Color Faint = Color.FromArgb(0x4C, 0x55, 0x61);
-
-        public static readonly Color Teal = Color.FromArgb(0x00, 0xE5, 0xC0);
-        public static readonly Color TealLow = Color.FromArgb(0x0A, 0x8C, 0x7A);
-        public static readonly Color TealDeep = Color.FromArgb(0x00, 0xB9, 0x9C);
-        public static readonly Color Lime = Color.FromArgb(0x9B, 0xE8, 0x55);
-        public static readonly Color Amber = Color.FromArgb(0xFF, 0xB0, 0x20);
-        public static readonly Color Red = Color.FromArgb(0xFF, 0x4D, 0x4D);
-        public static readonly Color RedDeep = Color.FromArgb(0xD9, 0x3A, 0x3A);
-
-        public static readonly Font Display = Pick(12f, FontStyle.Regular,
-            "Bahnschrift SemiBold Condensed", "Bahnschrift Condensed", "Bahnschrift", "Segoe UI Semibold");
-        public static readonly Font DisplaySmall = Pick(10.5f, FontStyle.Regular,
-            "Bahnschrift SemiBold Condensed", "Bahnschrift Condensed", "Bahnschrift", "Segoe UI Semibold");
-        public static readonly Font DisplayLarge = Pick(14.5f, FontStyle.Regular,
-            "Bahnschrift SemiBold Condensed", "Bahnschrift Condensed", "Bahnschrift", "Segoe UI Semibold");
-
-        public static readonly Font Mono = Pick(7.5f, FontStyle.Regular, "Cascadia Mono", "Consolas", "Courier New");
-        public static readonly Font MonoTiny = Pick(6.5f, FontStyle.Regular, "Cascadia Mono", "Consolas", "Courier New");
-        public static readonly Font MonoRead = Pick(9f, FontStyle.Regular, "Cascadia Mono", "Consolas", "Courier New");
-
-        public static readonly Font Body = Pick(9f, FontStyle.Regular, "Segoe UI", "Tahoma");
-        public static readonly Font Icon = Pick(11f, FontStyle.Regular,
-            "Segoe Fluent Icons", "Segoe MDL2 Assets", "Segoe UI Symbol");
-        public static readonly Font IconSmall = Pick(8.5f, FontStyle.Regular,
-            "Segoe Fluent Icons", "Segoe MDL2 Assets", "Segoe UI Symbol");
-        public static readonly Font IconLarge = Pick(15f, FontStyle.Regular,
-            "Segoe Fluent Icons", "Segoe MDL2 Assets", "Segoe UI Symbol");
-
-        /// <summary>Returns the first font family that is actually installed.</summary>
-        private static Font Pick(float size, FontStyle style, params string[] families)
+        public static void Forward(double[] real, double[] imaginary)
         {
-            foreach (string family in families)
+            int n = real.Length;
+
+            for (int i = 1, j = 0; i < n; i++)
             {
-                try
+                int bit = n >> 1;
+                for (; (j & bit) != 0; bit >>= 1) j ^= bit;
+                j ^= bit;
+                if (i < j)
                 {
-                    using (FontFamily candidate = new FontFamily(family))
+                    double t = real[i]; real[i] = real[j]; real[j] = t;
+                    t = imaginary[i]; imaginary[i] = imaginary[j]; imaginary[j] = t;
+                }
+            }
+
+            for (int length = 2; length <= n; length <<= 1)
+            {
+                double angle = -2.0 * Math.PI / length;
+                double wReal = Math.Cos(angle);
+                double wImaginary = Math.Sin(angle);
+
+                for (int i = 0; i < n; i += length)
+                {
+                    double curReal = 1.0, curImaginary = 0.0;
+                    for (int k = 0; k < length / 2; k++)
                     {
-                        return new Font(candidate, size, style, GraphicsUnit.Point);
-                    }
-                }
-                catch (ArgumentException) { }
-            }
-            return new Font(FontFamily.GenericSansSerif, size, style, GraphicsUnit.Point);
-        }
-
-        public static GraphicsPath RoundedRect(Rectangle bounds, int radius)
-        {
-            GraphicsPath path = new GraphicsPath();
-            int d = radius * 2;
-            if (d <= 0 || bounds.Width <= d || bounds.Height <= d)
-            {
-                path.AddRectangle(bounds);
-                return path;
-            }
-            path.AddArc(bounds.X, bounds.Y, d, d, 180, 90);
-            path.AddArc(bounds.Right - d, bounds.Y, d, d, 270, 90);
-            path.AddArc(bounds.Right - d, bounds.Bottom - d, d, d, 0, 90);
-            path.AddArc(bounds.X, bounds.Bottom - d, d, d, 90, 90);
-            path.CloseFigure();
-            return path;
-        }
-
-        /// <summary>Draws text with manual letter spacing, which GDI+ does not offer.</summary>
-        public static int DrawTracked(Graphics g, string text, Font font, Color color, float x, float y, float tracking)
-        {
-            if (string.IsNullOrEmpty(text)) return 0;
-
-            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-            float cursor = x;
-            using (SolidBrush brush = new SolidBrush(color))
-            {
-                foreach (char c in text)
-                {
-                    string glyph = c.ToString();
-                    g.DrawString(glyph, font, brush, cursor, y, StringFormat.GenericTypographic);
-                    cursor += MeasureGlyph(g, glyph, font) + tracking;
-                }
-            }
-            return (int)Math.Ceiling(cursor - tracking - x);
-        }
-
-        public static int MeasureTracked(Graphics g, string text, Font font, float tracking)
-        {
-            if (string.IsNullOrEmpty(text)) return 0;
-            float total = 0f;
-            foreach (char c in text) total += MeasureGlyph(g, c.ToString(), font) + tracking;
-            return (int)Math.Ceiling(total - tracking);
-        }
-
-        private static float MeasureGlyph(Graphics g, string glyph, Font font)
-        {
-            if (glyph == " ") return font.SizeInPoints * g.DpiX / 72f * 0.30f;
-            return g.MeasureString(glyph, font, PointF.Empty, StringFormat.GenericTypographic).Width;
-        }
-    }
-
-    /// <summary>Segoe MDL2 / Fluent icon code points used by the interface.</summary>
-    internal static class Glyphs
-    {
-        public const string Microphone = "\uE720";
-        public const string Headphone = "\uE7F6";
-        public const string Play = "\uE768";
-        public const string Stop = "\uE71A";
-        public const string ChevronDown = "\uE70D";
-        public const string Minimize = "\uE921";
-        public const string Close = "\uE8BB";
-        public const string Refresh = "\uE72C";
-    }
-
-    #endregion
-
-    #region Custom controls
-
-    /// <summary>Base for every owner-drawn control in the app.</summary>
-    internal abstract class PaintedControl : Control
-    {
-        protected PaintedControl()
-        {
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
-                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            BackColor = Theme.Panel;
-            TabStop = false;
-        }
-    }
-
-    /// <summary>Mono label with letter spacing, optionally clickable.</summary>
-    internal sealed class TrackedLabel : PaintedControl
-    {
-        private bool hovered;
-
-        public float Tracking = 2.4f;
-        public Color Color = Theme.Dim;
-        public Color HoverColor = Theme.Text;
-        public bool Clickable;
-        public ContentAlignment Align = ContentAlignment.MiddleLeft;
-
-        public TrackedLabel()
-        {
-            Font = Theme.Mono;
-            Height = 14;
-        }
-
-        protected override void OnMouseEnter(EventArgs e)
-        {
-            base.OnMouseEnter(e);
-            if (!Clickable) return;
-            hovered = true;
-            Cursor = Cursors.Hand;
-            Invalidate();
-        }
-
-        protected override void OnMouseLeave(EventArgs e)
-        {
-            base.OnMouseLeave(e);
-            hovered = false;
-            Invalidate();
-        }
-
-        protected override void OnTextChanged(EventArgs e)
-        {
-            base.OnTextChanged(e);
-            Invalidate();
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            Graphics g = e.Graphics;
-            using (SolidBrush brush = new SolidBrush(BackColor)) g.FillRectangle(brush, ClientRectangle);
-
-            int textWidth = Theme.MeasureTracked(g, Text, Font, Tracking);
-            float x = 0f;
-            if (Align == ContentAlignment.MiddleRight) x = Width - textWidth;
-            else if (Align == ContentAlignment.MiddleCenter) x = (Width - textWidth) / 2f;
-
-            float y = (Height - Font.GetHeight(g)) / 2f;
-            Theme.DrawTracked(g, Text, Font, hovered ? HoverColor : Color, x, y, Tracking);
-        }
-    }
-
-    /// <summary>Recessed panel: dark outer edge, lighter inner edge, flat fill.</summary>
-    internal sealed class RecessedPanel : PaintedControl
-    {
-        public int Radius = 8;
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            Graphics g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-
-            using (SolidBrush brush = new SolidBrush(BackColor)) g.FillRectangle(brush, ClientRectangle);
-
-            Rectangle outer = new Rectangle(0, 0, Width - 1, Height - 1);
-            using (GraphicsPath path = Theme.RoundedRect(outer, Radius))
-            using (SolidBrush fill = new SolidBrush(Theme.Panel))
-            using (Pen pen = new Pen(Theme.Shadow))
-            {
-                g.FillPath(fill, path);
-                g.DrawPath(pen, path);
-            }
-
-            Rectangle inner = new Rectangle(1, 1, Width - 3, Height - 3);
-            using (GraphicsPath path = Theme.RoundedRect(inner, Radius - 1))
-            using (Pen pen = new Pen(Theme.EdgeSoft))
-            {
-                g.DrawPath(pen, path);
-            }
-        }
-    }
-
-    /// <summary>Device picker drawn as a recessed well with an icon and a caret.</summary>
-    internal sealed class DeviceSelect : ComboBox
-    {
-        private const int WmPaint = 0x000F;
-        private const int WmPrintClient = 0x0318;
-
-        private bool hovered;
-
-        public string Glyph = Glyphs.Microphone;
-
-        public DeviceSelect()
-        {
-            DropDownStyle = ComboBoxStyle.DropDownList;
-            FlatStyle = FlatStyle.Flat;
-            DrawMode = DrawMode.OwnerDrawFixed;
-            BackColor = Theme.Well;
-            ForeColor = Theme.TextSoft;
-            Font = Theme.Body;
-            ItemHeight = 21;
-            Height = 32;
-            DrawItem += OnDrawItem;
-        }
-
-        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hovered = true; Invalidate(); }
-        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hovered = false; Invalidate(); }
-
-        private void OnDrawItem(object sender, DrawItemEventArgs e)
-        {
-            bool selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
-            using (SolidBrush background = new SolidBrush(selected ? Color.FromArgb(0x10, 0x2A, 0x28) : Theme.Well))
-            {
-                e.Graphics.FillRectangle(background, e.Bounds);
-            }
-            if (e.Index < 0 || e.Index >= Items.Count) return;
-
-            Rectangle bounds = new Rectangle(e.Bounds.X + 7, e.Bounds.Y, e.Bounds.Width - 12, e.Bounds.Height);
-            TextRenderer.DrawText(e.Graphics, Items[e.Index].ToString(), Theme.Body, bounds,
-                selected ? Theme.Teal : Theme.TextSoft,
-                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis |
-                TextFormatFlags.NoPrefix);
-        }
-
-        protected override void WndProc(ref Message m)
-        {
-            base.WndProc(ref m);
-
-            // The closed combo box is painted by the system in light colours, so
-            // its client area is fully redrawn on top of the themed result.
-            if (m.Msg == WmPaint)
-            {
-                using (Graphics g = Graphics.FromHwnd(Handle)) Render(g);
-            }
-            else if (m.Msg == WmPrintClient && m.WParam != IntPtr.Zero)
-            {
-                using (Graphics g = Graphics.FromHdc(m.WParam)) Render(g);
-            }
-        }
-
-        private void Render(Graphics g)
-        {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-
-            using (SolidBrush brush = new SolidBrush(Theme.Panel))
-            {
-                g.FillRectangle(brush, 0, 0, Width, Height);
-            }
-
-            Rectangle bounds = new Rectangle(0, 0, Width - 1, Height - 1);
-            using (GraphicsPath path = Theme.RoundedRect(bounds, 6))
-            using (LinearGradientBrush fill = new LinearGradientBrush(
-                       new Rectangle(0, 0, Width, Height), Theme.Well, Color.FromArgb(0x14, 0x18, 0x20), 90f))
-            using (Pen pen = new Pen(Enabled && hovered ? Theme.TealLow : Theme.Edge))
-            {
-                g.FillPath(fill, path);
-                g.DrawPath(pen, path);
-            }
-
-            Color glyphColor = Enabled ? Theme.TealLow : Theme.Faint;
-            TextRenderer.DrawText(g, Glyph, Theme.IconSmall, new Rectangle(8, 0, 18, Height), glyphColor,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-
-            string text = SelectedItem == null ? string.Empty : SelectedItem.ToString();
-            Rectangle textBounds = new Rectangle(29, 0, Width - 52, Height);
-            TextRenderer.DrawText(g, text, Font, textBounds, Enabled ? Theme.TextSoft : Theme.Dim,
-                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis |
-                TextFormatFlags.NoPrefix);
-
-            TextRenderer.DrawText(g, Glyphs.ChevronDown, Theme.IconSmall,
-                new Rectangle(Width - 24, 0, 20, Height), Enabled ? Theme.Faint : Theme.EdgeSoft,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-        }
-    }
-
-    /// <summary>Recessed track with a teal fill and a knurled thumb.</summary>
-    internal sealed class Slider : PaintedControl
-    {
-        private int minimum;
-        private int maximum = 100;
-        private int current = 50;
-        private bool dragging;
-        private bool hovered;
-
-        public event EventHandler ValueChanged;
-
-        public Slider()
-        {
-            Height = 22;
-        }
-
-        public int Minimum { get { return minimum; } set { minimum = value; Value = current; Invalidate(); } }
-        public int Maximum { get { return maximum; } set { maximum = value; Value = current; Invalidate(); } }
-
-        public int Value
-        {
-            get { return current; }
-            set
-            {
-                int clamped = Math.Max(minimum, Math.Min(maximum, value));
-                if (clamped == current) return;
-                current = clamped;
-                Invalidate();
-                if (ValueChanged != null) ValueChanged(this, EventArgs.Empty);
-            }
-        }
-
-        private Rectangle Track
-        {
-            get { return new Rectangle(9, Height / 2 - 3, Math.Max(1, Width - 18), 6); }
-        }
-
-        private int ThumbX
-        {
-            get
-            {
-                Rectangle t = Track;
-                double fraction = maximum == minimum ? 0.0 : (double)(current - minimum) / (maximum - minimum);
-                return t.X + (int)Math.Round(fraction * t.Width);
-            }
-        }
-
-        private void SetFromMouse(int x)
-        {
-            Rectangle t = Track;
-            double fraction = (double)(x - t.X) / Math.Max(1, t.Width);
-            fraction = Math.Max(0.0, Math.Min(1.0, fraction));
-            Value = minimum + (int)Math.Round(fraction * (maximum - minimum));
-        }
-
-        protected override void OnMouseDown(MouseEventArgs e)
-        {
-            base.OnMouseDown(e);
-            if (e.Button != MouseButtons.Left || !Enabled) return;
-            dragging = true;
-            Capture = true;
-            SetFromMouse(e.X);
-        }
-
-        protected override void OnMouseMove(MouseEventArgs e)
-        {
-            base.OnMouseMove(e);
-            if (dragging) SetFromMouse(e.X);
-        }
-
-        protected override void OnMouseUp(MouseEventArgs e)
-        {
-            base.OnMouseUp(e);
-            dragging = false;
-            Capture = false;
-        }
-
-        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hovered = true; Invalidate(); }
-        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hovered = false; Invalidate(); }
-
-        protected override void OnMouseWheel(MouseEventArgs e)
-        {
-            base.OnMouseWheel(e);
-            Value = current + (e.Delta > 0 ? 1 : -1);
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            Graphics g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (SolidBrush brush = new SolidBrush(BackColor)) g.FillRectangle(brush, ClientRectangle);
-
-            Rectangle track = Track;
-            using (GraphicsPath path = Theme.RoundedRect(track, 3))
-            using (LinearGradientBrush fill = new LinearGradientBrush(
-                       new Rectangle(track.X, track.Y - 1, track.Width, track.Height + 2),
-                       Color.FromArgb(0x08, 0x0A, 0x0D), Color.FromArgb(0x12, 0x16, 0x1B), 90f))
-            using (Pen pen = new Pen(Theme.EdgeSoft))
-            {
-                g.FillPath(fill, path);
-                g.DrawPath(pen, path);
-            }
-
-            int thumbX = ThumbX;
-            int fillWidth = thumbX - track.X;
-            if (fillWidth > 2)
-            {
-                Rectangle filled = new Rectangle(track.X, track.Y, fillWidth, track.Height);
-                using (GraphicsPath path = Theme.RoundedRect(filled, 3))
-                using (LinearGradientBrush brush = new LinearGradientBrush(
-                           new Rectangle(filled.X, filled.Y, filled.Width, filled.Height),
-                           Theme.TealLow, Theme.Teal, 0f))
-                {
-                    g.FillPath(brush, path);
-                }
-
-                // Soft glow underneath, faked with two translucent outlines.
-                using (GraphicsPath path = Theme.RoundedRect(
-                           new Rectangle(filled.X - 1, filled.Y - 1, filled.Width + 2, filled.Height + 2), 4))
-                using (Pen pen = new Pen(Color.FromArgb(60, Theme.Teal)))
-                {
-                    g.DrawPath(pen, path);
-                }
-            }
-
-            int radius = Enabled ? (hovered || dragging ? 9 : 8) : 7;
-            Rectangle thumb = new Rectangle(thumbX - radius, Height / 2 - radius, radius * 2, radius * 2);
-
-            if (Enabled && (hovered || dragging))
-            {
-                using (SolidBrush halo = new SolidBrush(Color.FromArgb(36, Theme.Teal)))
-                {
-                    g.FillEllipse(halo, Rectangle.Inflate(thumb, 4, 4));
-                }
-            }
-
-            using (LinearGradientBrush brush = new LinearGradientBrush(thumb,
-                       Color.FromArgb(0xF2, 0xF6, 0xFA), Color.FromArgb(0xB0, 0xBA, 0xC7), 90f))
-            {
-                g.FillEllipse(brush, thumb);
-            }
-            using (Pen pen = new Pen(Theme.Shadow))
-            {
-                g.DrawEllipse(pen, thumb);
-            }
-
-            // Knurling.
-            using (Pen pen = new Pen(Color.FromArgb(0x8C, 0x97, 0xA5)))
-            {
-                for (int i = -2; i <= 2; i += 2)
-                {
-                    g.DrawLine(pen, thumbX + i, thumb.Y + 5, thumbX + i, thumb.Bottom - 5);
-                }
-            }
-        }
-    }
-
-    /// <summary>24-segment LED meter with peak hold and an engraved dB scale.</summary>
-    internal sealed class LevelMeter : PaintedControl
-    {
-        private const int Segments = 24;
-
-        private float level;
-        private float peakHold;
-        private int holdFrames;
-
-        public LevelMeter()
-        {
-            Height = 40;
-        }
-
-        private static readonly string[] ScaleLabels = { "-60", "-40", "-24", "-12", "-6", "0 dB" };
-
-        /// <param name="peak">Linear peak amplitude in the 0..1 range.</param>
-        public void Push(float peak)
-        {
-            float db = peak <= 0.00001f ? -60f : (float)(20.0 * Math.Log10(peak));
-            float normalized = (db + 60f) / 60f;
-            if (normalized < 0f) normalized = 0f;
-            if (normalized > 1f) normalized = 1f;
-
-            level = normalized > level ? normalized : level * 0.72f + normalized * 0.28f;
-
-            if (level >= peakHold)
-            {
-                peakHold = level;
-                holdFrames = 25;
-            }
-            else if (holdFrames > 0)
-            {
-                holdFrames--;
-            }
-            else
-            {
-                peakHold = Math.Max(level, peakHold - 0.018f);
-            }
-
-            Invalidate();
-        }
-
-        public void Reset()
-        {
-            level = 0f;
-            peakHold = 0f;
-            holdFrames = 0;
-            Invalidate();
-        }
-
-        private static Color SegmentColor(int index)
-        {
-            float position = (float)index / Segments;
-            if (position > 0.92f) return Theme.Red;
-            if (position > 0.78f) return Theme.Amber;
-            if (position > 0.60f) return Theme.Lime;
-            return Theme.Teal;
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            Graphics g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (SolidBrush brush = new SolidBrush(BackColor)) g.FillRectangle(brush, ClientRectangle);
-
-            const int gap = 2;
-            const int barHeight = 26;
-            int segmentWidth = (Width - gap * (Segments - 1)) / Segments;
-            int lit = (int)Math.Round(level * Segments);
-            int peakIndex = (int)Math.Round(peakHold * Segments) - 1;
-
-            for (int i = 0; i < Segments; i++)
-            {
-                Rectangle cell = new Rectangle(i * (segmentWidth + gap), 0, segmentWidth, barHeight);
-                using (GraphicsPath path = Theme.RoundedRect(cell, 2))
-                {
-                    if (i < lit)
-                    {
-                        Color on = SegmentColor(i);
-                        using (LinearGradientBrush brush = new LinearGradientBrush(
-                                   new Rectangle(cell.X, cell.Y - 1, cell.Width, cell.Height + 2),
-                                   ControlPaint.Light(on, 0.25f), on, 90f))
-                        {
-                            g.FillPath(brush, path);
-                        }
-                    }
-                    else if (i == peakIndex)
-                    {
-                        using (SolidBrush brush = new SolidBrush(Color.FromArgb(120, SegmentColor(i))))
-                        {
-                            g.FillPath(brush, path);
-                        }
-                    }
-                    else
-                    {
-                        using (SolidBrush brush = new SolidBrush(Color.FromArgb(0x0F, 0x13, 0x17)))
-                        using (Pen pen = new Pen(Color.FromArgb(0x1C, 0x21, 0x28)))
-                        {
-                            g.FillPath(brush, path);
-                            g.DrawPath(pen, path);
-                        }
+                        int a = i + k, b = i + k + length / 2;
+                        double xReal = real[b] * curReal - imaginary[b] * curImaginary;
+                        double xImaginary = real[b] * curImaginary + imaginary[b] * curReal;
+
+                        real[b] = real[a] - xReal;
+                        imaginary[b] = imaginary[a] - xImaginary;
+                        real[a] += xReal;
+                        imaginary[a] += xImaginary;
+
+                        double nextReal = curReal * wReal - curImaginary * wImaginary;
+                        curImaginary = curReal * wImaginary + curImaginary * wReal;
+                        curReal = nextReal;
                     }
                 }
             }
-
-            float y = barHeight + 5f;
-            for (int i = 0; i < ScaleLabels.Length; i++)
-            {
-                int textWidth = Theme.MeasureTracked(g, ScaleLabels[i], Theme.MonoTiny, 1.2f);
-                float x = i == 0
-                    ? 0f
-                    : i == ScaleLabels.Length - 1
-                        ? Width - textWidth
-                        : (Width - textWidth) * i / (float)(ScaleLabels.Length - 1);
-                Theme.DrawTracked(g, ScaleLabels[i], Theme.MonoTiny, Theme.Faint, x, y, 1.2f);
-            }
         }
     }
 
-    /// <summary>Main action button: gradient face, icon glyph and tracked caption.</summary>
-    internal sealed class PowerButton : PaintedControl
+    /// <summary>
+    /// Rolling window of mono samples turned into log-spaced spectrum bands.
+    /// Filled from the audio thread, read from the UI thread.
+    /// </summary>
+    internal sealed class SpectrumAnalyzer
     {
-        private bool hovered;
-        private bool pressed;
+        public const int WindowSize = 1024;
+        public const int BandCount = 72;
 
-        public Color GradientTop = Color.FromArgb(0x00, 0xF5, 0xCE);
-        public Color GradientBottom = Theme.TealDeep;
-        public Color Base = Color.FromArgb(0x00, 0x5F, 0x51);
-        public Color Face = Color.FromArgb(0x04, 0x23, 0x1E);
-        public string Glyph = Glyphs.Play;
+        private readonly float[] ring = new float[WindowSize];
+        private readonly double[] window = new double[WindowSize];
+        private readonly double[] real = new double[WindowSize];
+        private readonly double[] imaginary = new double[WindowSize];
+        private readonly float[] bands = new float[BandCount];
+        private readonly object gate = new object();
 
-        public PowerButton()
+        private int writeIndex;
+        private int sampleRate = 48000;
+
+        public SpectrumAnalyzer()
         {
-            BackColor = Theme.ChassisBottom;
-            Font = Theme.DisplayLarge;
-            Cursor = Cursors.Hand;
-            Height = 52;
-        }
-
-        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hovered = true; Invalidate(); }
-        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hovered = false; pressed = false; Invalidate(); }
-        protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); pressed = true; Invalidate(); }
-        protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); pressed = false; Invalidate(); }
-        protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); Invalidate(); }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            Graphics g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (SolidBrush brush = new SolidBrush(BackColor)) g.FillRectangle(brush, ClientRectangle);
-
-            int lift = pressed ? 1 : hovered ? -1 : 0;
-            Rectangle body = new Rectangle(0, 2 + lift, Width - 1, Height - 5);
-            Rectangle plinth = new Rectangle(0, body.Y + 2, Width - 1, body.Height);
-
-            using (GraphicsPath path = Theme.RoundedRect(plinth, 9))
-            using (SolidBrush brush = new SolidBrush(Base))
+            for (int i = 0; i < WindowSize; i++)
             {
-                g.FillPath(brush, path);
-            }
-
-            using (GraphicsPath path = Theme.RoundedRect(body, 9))
-            using (LinearGradientBrush brush = new LinearGradientBrush(
-                       new Rectangle(body.X, body.Y - 1, body.Width, body.Height + 2),
-                       hovered ? ControlPaint.Light(GradientTop, 0.15f) : GradientTop, GradientBottom, 90f))
-            using (Pen pen = new Pen(Color.FromArgb(120, Color.White)))
-            {
-                g.FillPath(brush, path);
-                g.DrawPath(pen, path);
-            }
-
-            int glyphWidth = 20;
-            int textWidth = Theme.MeasureTracked(g, Text, Font, 3.2f);
-            int totalWidth = glyphWidth + 6 + textWidth;
-            int startX = (Width - totalWidth) / 2;
-
-            TextRenderer.DrawText(g, Glyph, Theme.Icon,
-                new Rectangle(startX, body.Y, glyphWidth, body.Height), Face,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-
-            float textY = body.Y + (body.Height - Font.GetHeight(g)) / 2f;
-            Theme.DrawTracked(g, Text, Font, Face, startX + glyphWidth + 6, textY, 3.2f);
-        }
-    }
-
-    /// <summary>Pill toggle with a mono caption.</summary>
-    internal sealed class ToggleSwitch : PaintedControl
-    {
-        private bool selected;
-        private bool hovered;
-
-        public event EventHandler CheckedChanged;
-
-        public ToggleSwitch()
-        {
-            BackColor = Theme.ChassisBottom;
-            Font = Theme.Mono;
-            Cursor = Cursors.Hand;
-            Height = 20;
-        }
-
-        public bool Checked
-        {
-            get { return selected; }
-            set
-            {
-                if (selected == value) return;
-                selected = value;
-                Invalidate();
-                if (CheckedChanged != null) CheckedChanged(this, EventArgs.Empty);
+                window[i] = 0.5 * (1.0 - Math.Cos(2.0 * Math.PI * i / (WindowSize - 1)));
             }
         }
 
-        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hovered = true; Invalidate(); }
-        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hovered = false; Invalidate(); }
+        public float DominantHz { get; private set; }
 
-        protected override void OnMouseDown(MouseEventArgs e)
+        public void SetSampleRate(int rate)
         {
-            base.OnMouseDown(e);
-            if (e.Button == MouseButtons.Left) Checked = !Checked;
+            sampleRate = rate <= 0 ? 48000 : rate;
         }
 
-        protected override void OnPaint(PaintEventArgs e)
+        /// <summary>Called from the audio thread with one channel of samples.</summary>
+        public void Push(float[] samples, int count)
         {
-            Graphics g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (SolidBrush brush = new SolidBrush(BackColor)) g.FillRectangle(brush, ClientRectangle);
-
-            Rectangle pill = new Rectangle(0, Height / 2 - 8, 30, 16);
-            using (GraphicsPath path = Theme.RoundedRect(pill, 8))
-            using (SolidBrush fill = new SolidBrush(selected ? Color.FromArgb(0x06, 0x3A, 0x33) : Theme.Well))
-            using (Pen pen = new Pen(selected ? Theme.TealLow : Theme.Edge))
+            lock (gate)
             {
-                g.FillPath(fill, path);
-                g.DrawPath(pen, path);
-            }
-
-            Rectangle knob = new Rectangle(selected ? pill.Right - 14 : pill.X + 2, pill.Y + 2, 12, 12);
-            if (selected)
-            {
-                using (SolidBrush halo = new SolidBrush(Color.FromArgb(70, Theme.Teal)))
+                for (int i = 0; i < count; i++)
                 {
-                    g.FillEllipse(halo, Rectangle.Inflate(knob, 3, 3));
+                    ring[writeIndex] = samples[i];
+                    writeIndex = (writeIndex + 1) & (WindowSize - 1);
                 }
             }
-            using (SolidBrush brush = new SolidBrush(selected ? Theme.Teal : Color.FromArgb(0x4A, 0x53, 0x5F)))
+        }
+
+        /// <summary>Computes the current spectrum. Called from the UI thread.</summary>
+        public float[] Analyze()
+        {
+            lock (gate)
             {
-                g.FillEllipse(brush, knob);
+                int start = writeIndex;
+                for (int i = 0; i < WindowSize; i++)
+                {
+                    real[i] = ring[(start + i) & (WindowSize - 1)] * window[i];
+                    imaginary[i] = 0.0;
+                }
             }
 
-            Color color = selected ? Theme.TextSoft : hovered ? Theme.Dim : Theme.Faint;
-            float y = (Height - Font.GetHeight(g)) / 2f;
-            Theme.DrawTracked(g, Text, Font, color, 38f, y, 1.6f);
+            Fft.Forward(real, imaginary);
+
+            int bins = WindowSize / 2;
+            double binHz = (double)sampleRate / WindowSize;
+            const double minHz = 40.0;
+            double maxHz = Math.Min(20000.0, sampleRate / 2.0);
+            double logMin = Math.Log10(minHz), logMax = Math.Log10(maxHz);
+
+            double loudest = 0.0;
+            int loudestBin = 0;
+
+            for (int band = 0; band < BandCount; band++)
+            {
+                double lowHz = Math.Pow(10, logMin + (logMax - logMin) * band / BandCount);
+                double highHz = Math.Pow(10, logMin + (logMax - logMin) * (band + 1) / BandCount);
+
+                int lowBin = Math.Max(1, (int)Math.Floor(lowHz / binHz));
+                int highBin = Math.Min(bins - 1, Math.Max(lowBin, (int)Math.Ceiling(highHz / binHz)));
+
+                double peak = 0.0;
+                for (int bin = lowBin; bin <= highBin; bin++)
+                {
+                    double magnitude = Math.Sqrt(real[bin] * real[bin] + imaginary[bin] * imaginary[bin]);
+                    if (magnitude > peak) peak = magnitude;
+                    if (magnitude > loudest) { loudest = magnitude; loudestBin = bin; }
+                }
+
+                // Normalised magnitude mapped onto a -78..0 dB display range.
+                double normalized = peak / (WindowSize / 4.0);
+                double db = normalized <= 1e-7 ? -100.0 : 20.0 * Math.Log10(normalized);
+                double value = (db + 78.0) / 78.0;
+                bands[band] = (float)Math.Max(0.0, Math.Min(1.0, value));
+            }
+
+            DominantHz = loudest < 0.02 ? 0f : (float)(loudestBin * binHz);
+            return bands;
+        }
+    }
+
+    /// <summary>Per-channel peak/RMS plus stereo correlation for one capture block.</summary>
+    internal sealed class InputMeter
+    {
+        private float peakLeft, peakRight;
+        private double sumLeft, sumRight, sumProduct;
+        private long frames;
+        private double noiseFloor = 1.0;
+
+        private readonly object gate = new object();
+
+        public void Add(float left, float right)
+        {
+            float absLeft = left < 0 ? -left : left;
+            float absRight = right < 0 ? -right : right;
+            if (absLeft > peakLeft) peakLeft = absLeft;
+            if (absRight > peakRight) peakRight = absRight;
+            sumLeft += left * left;
+            sumRight += right * right;
+            sumProduct += left * right;
+            frames++;
+        }
+
+        public void Commit()
+        {
+            lock (gate)
+            {
+                if (frames <= 0) return;
+                double rms = Math.Sqrt((sumLeft + sumRight) / (2.0 * frames));
+
+                lastPeakLeft = peakLeft;
+                lastPeakRight = peakRight;
+                lastRms = rms;
+
+                double denominator = Math.Sqrt(sumLeft * sumRight);
+                lastCorrelation = denominator < 1e-12 ? 1.0 : sumProduct / denominator;
+
+                // Slow tracker that settles on the quietest recent block.
+                if (rms > 1e-9)
+                {
+                    noiseFloor = rms < noiseFloor ? noiseFloor * 0.85 + rms * 0.15 : noiseFloor * 0.9995 + rms * 0.0005;
+                }
+
+                peakLeft = 0f; peakRight = 0f;
+                sumLeft = 0.0; sumRight = 0.0; sumProduct = 0.0; frames = 0;
+            }
+        }
+
+        private double lastPeakLeft, lastPeakRight, lastRms, lastCorrelation = 1.0;
+
+        public void Read(out double peakLeftDb, out double peakRightDb, out double rmsDb,
+                         out double correlation, out double floorDb)
+        {
+            lock (gate)
+            {
+                peakLeftDb = ToDb(lastPeakLeft);
+                peakRightDb = ToDb(lastPeakRight);
+                rmsDb = ToDb(lastRms);
+                correlation = lastCorrelation;
+                floorDb = ToDb(noiseFloor);
+            }
+        }
+
+        public void ResetFloor()
+        {
+            lock (gate) { noiseFloor = 1.0; }
+        }
+
+        private static double ToDb(double linear)
+        {
+            return linear <= 1e-6 ? -90.0 : 20.0 * Math.Log10(linear);
         }
     }
 
@@ -875,17 +433,19 @@ namespace MicMonitor
         }
     }
 
-    /// <summary>Applies make-up gain, an optional noise gate, and tracks the peak level.</summary>
+    /// <summary>Gain, noise gate and optional soft limiter on the monitor path.</summary>
     internal sealed class MonitorProcessor : ISampleProvider
     {
         private readonly ISampleProvider source;
         private readonly float attackCoefficient;
         private readonly float releaseCoefficient;
         private readonly float envelopeCoefficient;
+        private readonly float limiterRelease;
 
         private float envelope;
-        private float gateGain;
-        private float peak;
+        private float gateGain = 1f;
+        private float limiterGain = 1f;
+        private float gateReductionDb;
 
         public MonitorProcessor(ISampleProvider source)
         {
@@ -894,7 +454,7 @@ namespace MicMonitor
             attackCoefficient = CoefficientFor(0.003, rate);
             releaseCoefficient = CoefficientFor(0.120, rate);
             envelopeCoefficient = CoefficientFor(0.015, rate);
-            gateGain = 1f;
+            limiterRelease = CoefficientFor(0.080, rate);
         }
 
         private static float CoefficientFor(double seconds, int sampleRate)
@@ -910,15 +470,13 @@ namespace MicMonitor
 
         public volatile bool Muted;
 
+        /// <summary>Soft brickwall instead of hard clipping.</summary>
+        public volatile bool Limiter = true;
+
         public WaveFormat WaveFormat { get { return source.WaveFormat; } }
 
-        /// <summary>Returns the loudest sample seen since the previous call and clears it.</summary>
-        public float ReadAndResetPeak()
-        {
-            float value = peak;
-            peak = 0f;
-            return value;
-        }
+        /// <summary>How much the gate is currently attenuating, in dB.</summary>
+        public float GateReductionDb { get { return gateReductionDb; } }
 
         public int Read(float[] buffer, int offset, int count)
         {
@@ -927,14 +485,13 @@ namespace MicMonitor
             float gain = Gain;
             float threshold = GateThreshold;
             bool muted = Muted;
-            float localPeak = peak;
+            bool limiter = Limiter;
 
             for (int i = 0; i < read; i++)
             {
                 float sample = buffer[offset + i];
 
                 float magnitude = sample < 0f ? -sample : sample;
-                if (magnitude > localPeak) localPeak = magnitude;
                 envelope = magnitude + envelopeCoefficient * (envelope - magnitude);
 
                 if (threshold > 0f)
@@ -944,8 +501,21 @@ namespace MicMonitor
                     gateGain = target + coefficient * (gateGain - target);
                     sample *= gateGain;
                 }
+                else
+                {
+                    gateGain = 1f;
+                }
 
                 sample *= gain;
+
+                if (limiter)
+                {
+                    // Peak-driven gain reduction with a smooth release.
+                    float peak = sample < 0f ? -sample : sample;
+                    float needed = peak > 0.98f ? 0.98f / peak : 1f;
+                    limiterGain = needed < limiterGain ? needed : needed + limiterRelease * (limiterGain - needed);
+                    sample *= limiterGain;
+                }
 
                 if (sample > 1f) sample = 1f;
                 else if (sample < -1f) sample = -1f;
@@ -953,7 +523,7 @@ namespace MicMonitor
                 buffer[offset + i] = muted ? 0f : sample;
             }
 
-            peak = localPeak;
+            gateReductionDb = gateGain >= 0.999f ? 0f : (float)(-20.0 * Math.Log10(Math.Max(0.0001, gateGain)));
             return read;
         }
     }
@@ -1009,12 +579,24 @@ namespace MicMonitor
         private int maxQueuedBytes;
         private volatile bool running;
 
+        private float[] monoScratch = new float[4096];
+        private long processingTicks;
+        private long wallTicks;
+        private int dropouts;
+
         public event EventHandler<AudioEngineStoppedEventArgs> Stopped;
 
+        public readonly SpectrumAnalyzer Spectrum = new SpectrumAnalyzer();
+        public readonly InputMeter Meter = new InputMeter();
+
         public bool IsRunning { get { return running; } }
-        public string InputFormatText { get; private set; }
-        public string OutputFormatText { get; private set; }
         public int LatencyMilliseconds { get; private set; }
+        public int InputSampleRate { get; private set; }
+        public int InputChannels { get; private set; }
+        public int InputBits { get; private set; }
+        public int OutputSampleRate { get; private set; }
+        public int OutputChannels { get; private set; }
+        public int Dropouts { get { return dropouts; } }
 
         public float Gain
         {
@@ -1034,12 +616,41 @@ namespace MicMonitor
             set { if (processor != null) processor.Muted = value; }
         }
 
-        public float ReadAndResetPeak()
+        private bool limiter = true;
+
+        public bool Limiter
         {
-            return processor == null ? 0f : processor.ReadAndResetPeak();
+            get { return limiter; }
+            set { limiter = value; if (processor != null) processor.Limiter = value; }
         }
 
-        public void Start(string inputDeviceId, string outputDeviceId, int latencyMilliseconds, float gain, float gateThreshold, bool muted)
+        public float GateReductionDb
+        {
+            get { return processor == null ? 0f : processor.GateReductionDb; }
+        }
+
+        /// <summary>Share of the buffer period spent inside the capture callback.</summary>
+        public double LoadPercent
+        {
+            get
+            {
+                long wall = Interlocked.Read(ref wallTicks);
+                if (wall <= 0) return 0.0;
+                double value = 100.0 * Interlocked.Read(ref processingTicks) / wall;
+                return Math.Max(0.0, Math.Min(100.0, value));
+            }
+        }
+
+        public void ResetCounters()
+        {
+            Interlocked.Exchange(ref processingTicks, 0);
+            Interlocked.Exchange(ref wallTicks, 0);
+            Interlocked.Exchange(ref dropouts, 0);
+            Meter.ResetFloor();
+        }
+
+        public void Start(string inputDeviceId, string outputDeviceId, int latencyMilliseconds,
+                          float gain, float gateThreshold, bool muted, bool useLimiter)
         {
             Stop();
 
@@ -1048,13 +659,18 @@ namespace MicMonitor
             MMDevice outputDevice = enumerator.GetDevice(outputDeviceId);
 
             LatencyMilliseconds = latencyMilliseconds;
+            limiter = useLimiter;
 
             capture = new WasapiCapture(inputDevice, true, latencyMilliseconds);
             WaveFormat captureFormat = capture.WaveFormat;
             WaveFormat renderFormat = outputDevice.AudioClient.MixFormat;
 
-            InputFormatText = DescribeFormat(captureFormat);
-            OutputFormatText = DescribeFormat(renderFormat);
+            InputSampleRate = captureFormat.SampleRate;
+            InputChannels = captureFormat.Channels;
+            InputBits = captureFormat.BitsPerSample;
+            OutputSampleRate = renderFormat.SampleRate;
+            OutputChannels = renderFormat.Channels;
+            Spectrum.SetSampleRate(captureFormat.SampleRate);
 
             queue = new BufferedWaveProvider(captureFormat);
             queue.BufferDuration = TimeSpan.FromMilliseconds(Math.Max(400, latencyMilliseconds * 8));
@@ -1073,6 +689,7 @@ namespace MicMonitor
             processor.Gain = gain;
             processor.GateThreshold = gateThreshold;
             processor.Muted = muted;
+            processor.Limiter = useLimiter;
             chain = processor;
 
             if (chain.WaveFormat.SampleRate != renderFormat.SampleRate)
@@ -1080,6 +697,8 @@ namespace MicMonitor
                 chain = new WdlResamplingSampleProvider(chain, renderFormat.SampleRate);
             }
             chain = new MonoSpreadProvider(chain, renderFormat.Channels);
+
+            ResetCounters();
 
             capture.DataAvailable += OnDataAvailable;
             capture.RecordingStopped += OnRecordingStopped;
@@ -1093,19 +712,55 @@ namespace MicMonitor
             capture.StartRecording();
         }
 
-        private static string DescribeFormat(WaveFormat format)
-        {
-            return string.Format(CultureInfo.InvariantCulture, "{0:0.#} kHz {1} ch",
-                format.SampleRate / 1000.0, format.Channels);
-        }
-
         private void OnDataAvailable(object sender, WaveInEventArgs e)
         {
             BufferedWaveProvider target = queue;
             if (target == null || e.BytesRecorded <= 0) return;
 
-            if (target.BufferedBytes > maxQueuedBytes) target.ClearBuffer();
+            long started = Stopwatch.GetTimestamp();
+
+            WaveFormat format = capture.WaveFormat;
+            int channels = format.Channels;
+            int frames = e.BytesRecorded / (format.BitsPerSample / 8) / channels;
+
+            if (monoScratch.Length < frames) monoScratch = new float[frames];
+
+            bool isFloat = format.Encoding == WaveFormatEncoding.IeeeFloat ||
+                           (format.Encoding == WaveFormatEncoding.Extensible && format.BitsPerSample == 32);
+
+            for (int frame = 0; frame < frames; frame++)
+            {
+                float left, right;
+                if (isFloat)
+                {
+                    int offset = (frame * channels) * 4;
+                    left = BitConverter.ToSingle(e.Buffer, offset);
+                    right = channels > 1 ? BitConverter.ToSingle(e.Buffer, offset + 4) : left;
+                }
+                else
+                {
+                    int offset = (frame * channels) * 2;
+                    left = BitConverter.ToInt16(e.Buffer, offset) / 32768f;
+                    right = channels > 1 ? BitConverter.ToInt16(e.Buffer, offset + 2) / 32768f : left;
+                }
+
+                Meter.Add(left, right);
+                monoScratch[frame] = channels > 1 ? (left + right) * 0.5f : left;
+            }
+
+            Meter.Commit();
+            Spectrum.Push(monoScratch, frames);
+
+            if (target.BufferedBytes > maxQueuedBytes)
+            {
+                target.ClearBuffer();
+                Interlocked.Increment(ref dropouts);
+            }
             target.AddSamples(e.Buffer, 0, e.BytesRecorded);
+
+            long elapsed = Stopwatch.GetTimestamp() - started;
+            Interlocked.Add(ref processingTicks, elapsed);
+            Interlocked.Add(ref wallTicks, (long)(Stopwatch.Frequency * frames / (double)format.SampleRate));
         }
 
         private void OnRecordingStopped(object sender, StoppedEventArgs e)
@@ -1160,6 +815,32 @@ namespace MicMonitor
         }
     }
 
+    /// <summary>Minimal stopwatch helper (System.Diagnostics is not imported here).</summary>
+    internal static class Stopwatch
+    {
+        [DllImport("kernel32.dll")]
+        private static extern bool QueryPerformanceCounter(out long value);
+
+        [DllImport("kernel32.dll")]
+        private static extern bool QueryPerformanceFrequency(out long value);
+
+        public static readonly long Frequency = GetFrequency();
+
+        private static long GetFrequency()
+        {
+            long value;
+            QueryPerformanceFrequency(out value);
+            return value <= 0 ? 1 : value;
+        }
+
+        public static long GetTimestamp()
+        {
+            long value;
+            QueryPerformanceCounter(out value);
+            return value;
+        }
+    }
+
     #endregion
 
     #region Settings
@@ -1171,8 +852,15 @@ namespace MicMonitor
         public int Volume = 100;
         public int Latency = 25;
         public int Gate = 0;
+        public int GainDb = 0;
+        public bool Limiter = true;
         public bool AutoStartMonitoring = false;
         public bool MinimizeToTray = true;
+        public int WindowWidth = 1180;
+        public int WindowHeight = 820;
+        public int WindowX = -1;
+        public int WindowY = -1;
+        public bool Maximized = false;
 
         private static string FilePath
         {
@@ -1204,8 +892,15 @@ namespace MicMonitor
                         case "volume": settings.Volume = ParseInt(value, 100); break;
                         case "latency": settings.Latency = ParseInt(value, 25); break;
                         case "gate": settings.Gate = ParseInt(value, 0); break;
+                        case "gain": settings.GainDb = ParseInt(value, 0); break;
+                        case "limiter": settings.Limiter = value != "0"; break;
                         case "autostart": settings.AutoStartMonitoring = value == "1"; break;
-                        case "tray": settings.MinimizeToTray = value == "1"; break;
+                        case "tray": settings.MinimizeToTray = value != "0"; break;
+                        case "w": settings.WindowWidth = ParseInt(value, 1180); break;
+                        case "h": settings.WindowHeight = ParseInt(value, 820); break;
+                        case "x": settings.WindowX = ParseInt(value, -1); break;
+                        case "y": settings.WindowY = ParseInt(value, -1); break;
+                        case "max": settings.Maximized = value == "1"; break;
                     }
                 }
             }
@@ -1232,8 +927,15 @@ namespace MicMonitor
                 builder.AppendLine("volume=" + Volume.ToString(CultureInfo.InvariantCulture));
                 builder.AppendLine("latency=" + Latency.ToString(CultureInfo.InvariantCulture));
                 builder.AppendLine("gate=" + Gate.ToString(CultureInfo.InvariantCulture));
+                builder.AppendLine("gain=" + GainDb.ToString(CultureInfo.InvariantCulture));
+                builder.AppendLine("limiter=" + (Limiter ? "1" : "0"));
                 builder.AppendLine("autostart=" + (AutoStartMonitoring ? "1" : "0"));
                 builder.AppendLine("tray=" + (MinimizeToTray ? "1" : "0"));
+                builder.AppendLine("w=" + WindowWidth.ToString(CultureInfo.InvariantCulture));
+                builder.AppendLine("h=" + WindowHeight.ToString(CultureInfo.InvariantCulture));
+                builder.AppendLine("x=" + WindowX.ToString(CultureInfo.InvariantCulture));
+                builder.AppendLine("y=" + WindowY.ToString(CultureInfo.InvariantCulture));
+                builder.AppendLine("max=" + (Maximized ? "1" : "0"));
 
                 File.WriteAllText(path, builder.ToString());
             }
@@ -1265,14 +967,8 @@ namespace MicMonitor
                 using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKey, true))
                 {
                     if (key == null) return;
-                    if (enabled)
-                    {
-                        key.SetValue(ValueName, "\"" + Application.ExecutablePath + "\" --tray");
-                    }
-                    else if (key.GetValue(ValueName) != null)
-                    {
-                        key.DeleteValue(ValueName, false);
-                    }
+                    if (enabled) key.SetValue(ValueName, "\"" + Application.ExecutablePath + "\" --tray");
+                    else if (key.GetValue(ValueName) != null) key.DeleteValue(ValueName, false);
                 }
             }
             catch (Exception) { }
@@ -1283,10 +979,13 @@ namespace MicMonitor
 
     internal sealed class DeviceItem
     {
-        public DeviceItem(string id, string name) { Id = id; Name = name; }
+        public DeviceItem(string id, string name, bool isDefault)
+        {
+            Id = id; Name = name; IsDefault = isDefault;
+        }
         public string Id { get; private set; }
         public string Name { get; private set; }
-        public override string ToString() { return Name; }
+        public bool IsDefault { get; private set; }
     }
 
     internal sealed class MainForm : Form
@@ -1299,43 +998,48 @@ namespace MicMonitor
         [DllImport("user32.dll")]
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr insertAfter,
+            int x, int y, int cx, int cy, uint flags);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Rect
+        {
+            public int Left, Top, Right, Bottom;
+        }
+
+        private const uint SwpNoZOrder = 0x0004;
+        private const uint SwpNoActivate = 0x0010;
+
         private const int WmNcLButtonDown = 0x00A1;
+        private const int WmNcHitTest = 0x0084;
+        private const int WmDpiChanged = 0x02E0;
         private const int HtCaption = 2;
+        private const int HtLeft = 10, HtRight = 11, HtTop = 12, HtTopLeft = 13, HtTopRight = 14;
+        private const int HtBottom = 15, HtBottomLeft = 16, HtBottomRight = 17;
+
+        private const int ResizeMargin = 6;
+        private const int BaseMinimumWidth = 1000;
+        private const int BaseMinimumHeight = 700;
 
         #endregion
 
-        private const int FormWidth = 474;
-        private const int FormHeight = 684;
-        private const int TitleBarHeight = 38;
-        private const int SideMargin = 14;
-
         private readonly AudioEngine engine = new AudioEngine();
         private readonly Settings settings;
-        private readonly WinFormsTimer uiTimer = new WinFormsTimer();
+        private readonly WinFormsTimer meterTimer = new WinFormsTimer();
         private readonly WinFormsTimer startupTimer = new WinFormsTimer();
+        private readonly JavaScriptSerializer json = new JavaScriptSerializer();
 
-        private DeviceSelect inputSelect;
-        private DeviceSelect outputSelect;
-        private Slider volumeSlider;
-        private Slider latencySlider;
-        private Slider gateSlider;
-        private TrackedLabel volumeReadout;
-        private TrackedLabel latencyReadout;
-        private TrackedLabel gateReadout;
-        private TrackedLabel signalLabel;
-        private TrackedLabel statusLabel;
-        private LevelMeter meter;
-        private PowerButton powerButton;
-        private ToggleSwitch autoMonitorToggle;
-        private ToggleSwitch startupToggle;
+        private WebView2 webView;
         private NotifyIcon trayIcon;
 
-        private Rectangle minimizeButton;
-        private Rectangle closeButton;
-        private int hoveredTitleButton = -1;
-        private Color statusLedColor = Theme.Faint;
+        private List<DeviceItem> inputDevices = new List<DeviceItem>();
+        private List<DeviceItem> outputDevices = new List<DeviceItem>();
+        private string selectedInputId;
+        private string selectedOutputId;
+        private string statusMessage = "Pronto";
 
-        private bool loadingSettings = true;
+        private bool bridgeReady;
         private bool exitRequested;
         private bool autoStartAttempted;
         private readonly bool startHidden;
@@ -1345,442 +1049,141 @@ namespace MicMonitor
             this.startHidden = startHidden;
             settings = Settings.Load();
 
-            BuildUi();
+            BuildWindow();
             BuildTrayIcon();
+            RefreshDevices();
 
             engine.Stopped += OnEngineStopped;
+            engine.Limiter = settings.Limiter;
 
-            uiTimer.Interval = 40;
-            uiTimer.Tick += OnUiTick;
-            uiTimer.Start();
+            meterTimer.Interval = 33;
+            meterTimer.Tick += OnMeterTick;
 
-            // Fires once shortly after the message loop starts. Using a timer
-            // covers the tray-only launch, where OnShown never runs.
-            startupTimer.Interval = 250;
+            startupTimer.Interval = 400;
             startupTimer.Tick += delegate
             {
                 startupTimer.Stop();
                 TryAutoStart();
             };
             startupTimer.Start();
+
+            InitialiseWebView();
         }
 
-        #region UI construction
+        #region Window
 
-        private void BuildUi()
+        private void BuildWindow()
         {
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
-                     ControlStyles.OptimizedDoubleBuffer, true);
-
-            Text = "Mic Monitor";
+            Text = "Mic Flow";
             FormBorderStyle = FormBorderStyle.None;
-            StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(FormWidth, FormHeight);
-            BackColor = Theme.ChassisBottom;
-            ForeColor = Theme.Text;
-            Font = Theme.Body;
+            BackColor = Color.FromArgb(0x0C, 0x0E, 0x12);
+            MinimumSize = ScaledMinimum();
+            StartPosition = FormStartPosition.Manual;
             Icon = IconFactory.CreateAppIcon();
-            KeyPreview = true;
+            DoubleBuffered = true;
+            Padding = new Padding(1);
 
-            minimizeButton = new Rectangle(FormWidth - 74, 6, 32, 26);
-            closeButton = new Rectangle(FormWidth - 40, 6, 32, 26);
-
-            int panelWidth = FormWidth - SideMargin * 2;
-
-            // ---- routing panel ----
-            RecessedPanel routing = new RecessedPanel();
-            routing.Location = new Point(SideMargin, 118);
-            routing.Size = new Size(panelWidth, 150);
-            Controls.Add(routing);
-
-            routing.Controls.Add(MakeSectionLabel("ROUTING", 14, 11));
-
-            TrackedLabel rescan = MakeSectionLabel("RESCAN", 0, 11);
-            rescan.Color = Theme.Faint;
-            rescan.Align = ContentAlignment.MiddleRight;
-            rescan.Clickable = true;
-            rescan.Size = new Size(70, 14);
-            rescan.Location = new Point(routing.Width - 84, 11);
-            rescan.Click += OnRescanClicked;
-            routing.Controls.Add(rescan);
-
-            routing.Controls.Add(MakeFieldLabel("SOURCE", 14, 34));
-            inputSelect = MakeSelect(Glyphs.Microphone, 14, 48, panelWidth - 28);
-            routing.Controls.Add(inputSelect);
-
-            routing.Controls.Add(MakeFieldLabel("DESTINATION  ·  USA LE CUFFIE", 14, 90));
-            outputSelect = MakeSelect(Glyphs.Headphone, 14, 104, panelWidth - 28);
-            routing.Controls.Add(outputSelect);
-
-            // ---- signal panel ----
-            RecessedPanel signal = new RecessedPanel();
-            signal.Location = new Point(SideMargin, 278);
-            signal.Size = new Size(panelWidth, 178);
-            Controls.Add(signal);
-
-            signal.Controls.Add(MakeSectionLabel("SIGNAL", 14, 11));
-
-            signalLabel = MakeSectionLabel("STANDBY", 0, 11);
-            signalLabel.Color = Theme.Faint;
-            signalLabel.Align = ContentAlignment.MiddleRight;
-            signalLabel.Size = new Size(190, 14);
-            signalLabel.Location = new Point(signal.Width - 204, 11);
-            signal.Controls.Add(signalLabel);
-
-            signal.Controls.Add(MakeFieldLabel("MONITOR LEVEL", 14, 34));
-            volumeReadout = MakeReadout(signal.Width - 90, 32);
-            signal.Controls.Add(volumeReadout);
-            volumeSlider = MakeSlider(11, 52, panelWidth - 22, 0, 200);
-            volumeSlider.ValueChanged += OnVolumeChanged;
-            signal.Controls.Add(volumeSlider);
-
-            signal.Controls.Add(MakeFieldLabel("LATENCY", 14, 80));
-            latencyReadout = MakeReadout(signal.Width - 90, 78);
-            signal.Controls.Add(latencyReadout);
-            latencySlider = MakeSlider(11, 98, panelWidth - 22, 5, 120);
-            latencySlider.ValueChanged += OnLatencyChanged;
-            signal.Controls.Add(latencySlider);
-
-            signal.Controls.Add(MakeFieldLabel("NOISE GATE", 14, 126));
-            gateReadout = MakeReadout(signal.Width - 90, 124);
-            signal.Controls.Add(gateReadout);
-            gateSlider = MakeSlider(11, 144, panelWidth - 22, 0, 50);
-            gateSlider.ValueChanged += OnGateChanged;
-            signal.Controls.Add(gateSlider);
-
-            // ---- meter panel ----
-            RecessedPanel levelPanel = new RecessedPanel();
-            levelPanel.Location = new Point(SideMargin, 466);
-            levelPanel.Size = new Size(panelWidth, 86);
-            Controls.Add(levelPanel);
-
-            levelPanel.Controls.Add(MakeSectionLabel("INPUT LEVEL", 14, 11));
-
-            TrackedLabel hold = MakeSectionLabel("PEAK HOLD", 0, 11);
-            hold.Color = Theme.Faint;
-            hold.Align = ContentAlignment.MiddleRight;
-            hold.Size = new Size(100, 14);
-            hold.Location = new Point(levelPanel.Width - 114, 11);
-            levelPanel.Controls.Add(hold);
-
-            meter = new LevelMeter();
-            meter.Location = new Point(14, 32);
-            meter.Size = new Size(panelWidth - 28, 40);
-            levelPanel.Controls.Add(meter);
-
-            // ---- action ----
-            powerButton = new PowerButton();
-            powerButton.Text = "AVVIA ASCOLTO";
-            powerButton.Location = new Point(SideMargin, 562);
-            powerButton.Size = new Size(panelWidth, 52);
-            powerButton.Click += OnPowerClicked;
-            Controls.Add(powerButton);
-
-            statusLabel = new TrackedLabel();
-            statusLabel.Font = Theme.Mono;
-            statusLabel.Tracking = 1.1f;
-            statusLabel.Color = Theme.Dim;
-            statusLabel.BackColor = Theme.ChassisBottom;
-            statusLabel.Align = ContentAlignment.MiddleLeft;
-            statusLabel.Location = new Point(SideMargin + 16, 620);
-            statusLabel.Size = new Size(panelWidth - 16, 16);
-            statusLabel.Text = "PRONTO";
-            Controls.Add(statusLabel);
-
-            autoMonitorToggle = new ToggleSwitch();
-            autoMonitorToggle.Text = "AUTO-START";
-            autoMonitorToggle.Location = new Point(SideMargin + 2, 652);
-            autoMonitorToggle.Size = new Size(180, 20);
-            autoMonitorToggle.CheckedChanged += OnAutoMonitorChanged;
-            Controls.Add(autoMonitorToggle);
-
-            startupToggle = new ToggleSwitch();
-            startupToggle.Text = "AVVIO CON WINDOWS";
-            startupToggle.Location = new Point(FormWidth - 218, 652);
-            startupToggle.Size = new Size(204, 20);
-            startupToggle.CheckedChanged += OnStartupChanged;
-            Controls.Add(startupToggle);
-
-            RefreshDevices();
-            ApplySettingsToUi();
-            loadingSettings = false;
+            Size = new Size(Math.Max(1000, settings.WindowWidth), Math.Max(700, settings.WindowHeight));
+            if (settings.WindowX >= 0 && settings.WindowY >= 0 &&
+                IsOnAnyScreen(new Rectangle(settings.WindowX, settings.WindowY, Width, Height)))
+            {
+                Location = new Point(settings.WindowX, settings.WindowY);
+            }
+            else
+            {
+                Rectangle work = Screen.PrimaryScreen.WorkingArea;
+                Location = new Point(work.X + (work.Width - Width) / 2, work.Y + (work.Height - Height) / 2);
+            }
+            if (settings.Maximized) WindowState = FormWindowState.Maximized;
         }
 
-        private static TrackedLabel MakeSectionLabel(string text, int x, int y)
+        private Size ScaledMinimum()
         {
-            TrackedLabel label = new TrackedLabel();
-            label.Text = text;
-            label.Font = Theme.Mono;
-            label.Tracking = 3.2f;
-            label.Color = Theme.TealLow;
-            label.Location = new Point(x, y);
-            label.Size = new Size(220, 14);
-            return label;
+            using (Graphics g = CreateGraphics())
+            {
+                return new Size(
+                    (int)(BaseMinimumWidth * g.DpiX / 96f),
+                    (int)(BaseMinimumHeight * g.DpiY / 96f));
+            }
         }
 
-        private static TrackedLabel MakeFieldLabel(string text, int x, int y)
+        protected override void OnResize(EventArgs e)
         {
-            TrackedLabel label = new TrackedLabel();
-            label.Text = text;
-            label.Font = Theme.Mono;
-            label.Tracking = 1.5f;
-            label.Color = Theme.Dim;
-            label.Location = new Point(x, y);
-            label.Size = new Size(280, 14);
-            return label;
+            base.OnResize(e);
+            // The 1px frame only makes sense on a floating window.
+            Padding = new Padding(WindowState == FormWindowState.Maximized ? 0 : 1);
         }
 
-        private static TrackedLabel MakeReadout(int x, int y)
+        private static bool IsOnAnyScreen(Rectangle bounds)
         {
-            TrackedLabel label = new TrackedLabel();
-            label.Font = Theme.MonoRead;
-            label.Tracking = 0.6f;
-            label.Color = Theme.Text;
-            label.Align = ContentAlignment.MiddleRight;
-            label.Location = new Point(x, y);
-            label.Size = new Size(76, 18);
-            return label;
+            foreach (Screen screen in Screen.AllScreens)
+            {
+                if (screen.WorkingArea.IntersectsWith(bounds)) return true;
+            }
+            return false;
         }
-
-        private static Slider MakeSlider(int x, int y, int width, int minimum, int maximum)
-        {
-            Slider slider = new Slider();
-            slider.Location = new Point(x, y);
-            slider.Size = new Size(width, 22);
-            slider.Minimum = minimum;
-            slider.Maximum = maximum;
-            return slider;
-        }
-
-        private DeviceSelect MakeSelect(string glyph, int x, int y, int width)
-        {
-            DeviceSelect select = new DeviceSelect();
-            select.Glyph = glyph;
-            select.Location = new Point(x, y);
-            select.Size = new Size(width, 32);
-            select.SelectedIndexChanged += OnDeviceSelectionChanged;
-            return select;
-        }
-
-        private void BuildTrayIcon()
-        {
-            trayIcon = new NotifyIcon();
-            trayIcon.Icon = IconFactory.CreateAppIcon();
-            trayIcon.Text = "Mic Monitor";
-            trayIcon.Visible = true;
-            trayIcon.DoubleClick += delegate { ShowFromTray(); };
-
-            ContextMenuStrip menu = new ContextMenuStrip();
-            ToolStripMenuItem toggleItem = new ToolStripMenuItem("Avvia / ferma ascolto");
-            toggleItem.Click += delegate { ToggleMonitoring(); };
-            ToolStripMenuItem showItem = new ToolStripMenuItem("Mostra finestra");
-            showItem.Click += delegate { ShowFromTray(); };
-            ToolStripMenuItem exitItem = new ToolStripMenuItem("Esci");
-            exitItem.Click += delegate { exitRequested = true; Close(); };
-
-            menu.Items.Add(toggleItem);
-            menu.Items.Add(showItem);
-            menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add(exitItem);
-            trayIcon.ContextMenuStrip = menu;
-        }
-
-        #endregion
-
-        #region Chassis painting
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            Graphics g = e.Graphics;
-
-            using (LinearGradientBrush brush = new LinearGradientBrush(
-                       new Rectangle(0, 0, Width, Height), Theme.ChassisTop, Theme.ChassisBottom, 90f))
-            {
-                g.FillRectangle(brush, ClientRectangle);
-            }
-
-            // Brushed-metal streaks.
-            using (Pen pen = new Pen(Color.FromArgb(6, Color.White)))
-            {
-                for (int x = 0; x < Width; x += 3) g.DrawLine(pen, x, TitleBarHeight, x, Height);
-            }
-
-            DrawTitleBar(g);
-            DrawBrand(g);
-            DrawStatusLed(g);
-
-            using (Pen pen = new Pen(Color.FromArgb(0x33, 0x3B, 0x46)))
-            {
-                g.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
-            }
-        }
-
-        private void DrawTitleBar(Graphics g)
-        {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-
-            Rectangle bar = new Rectangle(0, 0, Width, TitleBarHeight);
-            using (LinearGradientBrush brush = new LinearGradientBrush(bar, Theme.TitleTop, Theme.TitleBottom, 90f))
-            {
-                g.FillRectangle(brush, bar);
-            }
-            using (Pen pen = new Pen(Color.FromArgb(0x0B, 0x0E, 0x11)))
-            {
-                g.DrawLine(pen, 0, TitleBarHeight - 1, Width, TitleBarHeight - 1);
-            }
-            using (Pen pen = new Pen(Color.FromArgb(14, Color.White)))
-            {
-                g.DrawLine(pen, 1, 1, Width - 2, 1);
-            }
-
-            Color led = engine.IsRunning ? Theme.Teal : Theme.Faint;
-            using (SolidBrush halo = new SolidBrush(Color.FromArgb(engine.IsRunning ? 70 : 0, Theme.Teal)))
-            {
-                g.FillEllipse(halo, 10, TitleBarHeight / 2 - 8, 16, 16);
-            }
-            using (SolidBrush brush = new SolidBrush(led))
-            {
-                g.FillEllipse(brush, 14, TitleBarHeight / 2 - 4, 9, 9);
-            }
-
-            Theme.DrawTracked(g, "MIC MONITOR", Theme.DisplaySmall, Color.FromArgb(0xAE, 0xB7, 0xC4),
-                32f, TitleBarHeight / 2f - Theme.DisplaySmall.GetHeight(g) / 2f - 1f, 2.6f);
-
-            DrawTitleButton(g, minimizeButton, Glyphs.Minimize, 0);
-            DrawTitleButton(g, closeButton, Glyphs.Close, 1);
-        }
-
-        private void DrawTitleButton(Graphics g, Rectangle bounds, string glyph, int index)
-        {
-            bool hovered = hoveredTitleButton == index;
-            if (hovered)
-            {
-                using (GraphicsPath path = Theme.RoundedRect(bounds, 5))
-                using (SolidBrush brush = new SolidBrush(index == 1
-                           ? Color.FromArgb(0x3A, 0x1A, 0x1F)
-                           : Color.FromArgb(0x26, 0x2C, 0x34)))
-                {
-                    g.FillPath(brush, path);
-                }
-            }
-
-            Color color = hovered
-                ? (index == 1 ? Theme.Red : Theme.Text)
-                : Color.FromArgb(0x6D, 0x77, 0x84);
-            TextRenderer.DrawText(g, glyph, Theme.IconSmall, bounds, color,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-        }
-
-        private void DrawBrand(Graphics g)
-        {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-
-            Rectangle mark = new Rectangle(20, 55, 34, 34);
-            using (GraphicsPath path = Theme.RoundedRect(mark, 9))
-            using (LinearGradientBrush brush = new LinearGradientBrush(mark,
-                       Color.FromArgb(0x0F, 0x3D, 0x36), Color.FromArgb(0x0A, 0x1A, 0x19), 60f))
-            using (Pen pen = new Pen(Color.FromArgb(0x1D, 0x5B, 0x51)))
-            {
-                g.FillPath(brush, path);
-                g.DrawPath(pen, path);
-            }
-            TextRenderer.DrawText(g, Glyphs.Microphone, Theme.Icon, mark, Theme.Teal,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-
-            Theme.DrawTracked(g, "MIC MONITOR", Theme.Display, Color.FromArgb(0xED, 0xF1, 0xF6), 67f, 56f, 3.0f);
-            Theme.DrawTracked(g, "DIRECT MONITORING  ·  NO VIRTUAL DRIVER", Theme.MonoTiny, Theme.Faint, 68f, 79f, 1.4f);
-
-            using (Pen pen = new Pen(Color.FromArgb(0x0C, 0x0F, 0x12)))
-            {
-                g.DrawLine(pen, 0, 106, Width, 106);
-            }
-            using (Pen pen = new Pen(Color.FromArgb(9, Color.White)))
-            {
-                g.DrawLine(pen, 0, 107, Width, 107);
-            }
-        }
-
-        private void DrawStatusLed(Graphics g)
-        {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            Rectangle led = new Rectangle(SideMargin + 2, 624, 8, 8);
-            using (SolidBrush halo = new SolidBrush(Color.FromArgb(60, statusLedColor)))
-            {
-                g.FillEllipse(halo, Rectangle.Inflate(led, 3, 3));
-            }
-            using (SolidBrush brush = new SolidBrush(statusLedColor))
-            {
-                g.FillEllipse(brush, led);
-            }
-
-            using (Pen pen = new Pen(Color.FromArgb(0x0C, 0x0F, 0x12)))
-            {
-                g.DrawLine(pen, 0, 642, Width, 642);
-            }
-            using (Pen pen = new Pen(Color.FromArgb(8, Color.White)))
-            {
-                g.DrawLine(pen, 0, 643, Width, 643);
-            }
-        }
-
-        #endregion
-
-        #region Window chrome behaviour
 
         protected override CreateParams CreateParams
         {
             get
             {
-                // CS_DROPSHADOW: the borderless chassis still casts a shadow.
                 CreateParams parameters = base.CreateParams;
-                parameters.ClassStyle |= 0x00020000;
+                parameters.ClassStyle |= 0x00020000; // CS_DROPSHADOW
                 return parameters;
             }
         }
 
-        protected override void OnMouseMove(MouseEventArgs e)
+        /// <summary>Turns the 1px frame around the browser into real resize grips.</summary>
+        protected override void WndProc(ref Message m)
         {
-            base.OnMouseMove(e);
-            int hovered = minimizeButton.Contains(e.Location) ? 0 : closeButton.Contains(e.Location) ? 1 : -1;
-            if (hovered == hoveredTitleButton) return;
-            hoveredTitleButton = hovered;
-            Invalidate(new Rectangle(0, 0, Width, TitleBarHeight));
-        }
-
-        protected override void OnMouseLeave(EventArgs e)
-        {
-            base.OnMouseLeave(e);
-            if (hoveredTitleButton == -1) return;
-            hoveredTitleButton = -1;
-            Invalidate(new Rectangle(0, 0, Width, TitleBarHeight));
-        }
-
-        protected override void OnMouseDown(MouseEventArgs e)
-        {
-            base.OnMouseDown(e);
-            if (e.Button != MouseButtons.Left) return;
-
-            if (minimizeButton.Contains(e.Location))
+            if (m.Msg == (int)Program.ShowMessage)
             {
-                WindowState = FormWindowState.Minimized;
+                ShowFromTray();
                 return;
             }
-            if (closeButton.Contains(e.Location))
+
+            // Moving the window to a monitor with a different scaling factor.
+            // Windows hands over the rectangle the window should occupy there;
+            // without honouring it the frame and the page end up disagreeing.
+            if (m.Msg == WmDpiChanged)
             {
-                Close();
+                int dpi = m.WParam.ToInt32() & 0xFFFF;
+                Rect suggested = (Rect)Marshal.PtrToStructure(m.LParam, typeof(Rect));
+
+                Size restore = MinimumSize;
+                MinimumSize = Size.Empty;
+                SetWindowPos(Handle, IntPtr.Zero,
+                    suggested.Left, suggested.Top,
+                    suggested.Right - suggested.Left, suggested.Bottom - suggested.Top,
+                    SwpNoZOrder | SwpNoActivate);
+                MinimumSize = new Size(BaseMinimumWidth * dpi / 96, BaseMinimumHeight * dpi / 96);
+                GC.KeepAlive(restore);
+
+                m.Result = IntPtr.Zero;
                 return;
             }
-            if (e.Y < TitleBarHeight)
-            {
-                ReleaseCapture();
-                SendMessage(Handle, WmNcLButtonDown, new IntPtr(HtCaption), IntPtr.Zero);
-            }
-        }
 
-        protected override void OnKeyDown(KeyEventArgs e)
-        {
-            base.OnKeyDown(e);
-            if (e.KeyCode == Keys.Escape) WindowState = FormWindowState.Minimized;
+            if (m.Msg == WmNcHitTest && WindowState == FormWindowState.Normal)
+            {
+                Point screenPoint = new Point(m.LParam.ToInt32());
+                Point p = PointToClient(screenPoint);
+
+                bool left = p.X <= ResizeMargin;
+                bool right = p.X >= ClientSize.Width - ResizeMargin;
+                bool top = p.Y <= ResizeMargin;
+                bool bottom = p.Y >= ClientSize.Height - ResizeMargin;
+
+                if (left && top) { m.Result = new IntPtr(HtTopLeft); return; }
+                if (right && top) { m.Result = new IntPtr(HtTopRight); return; }
+                if (left && bottom) { m.Result = new IntPtr(HtBottomLeft); return; }
+                if (right && bottom) { m.Result = new IntPtr(HtBottomRight); return; }
+                if (left) { m.Result = new IntPtr(HtLeft); return; }
+                if (right) { m.Result = new IntPtr(HtRight); return; }
+                if (top) { m.Result = new IntPtr(HtTop); return; }
+                if (bottom) { m.Result = new IntPtr(HtBottom); return; }
+            }
+
+            base.WndProc(ref m);
         }
 
         protected override void SetVisibleCore(bool value)
@@ -1794,97 +1197,412 @@ namespace MicMonitor
             base.SetVisibleCore(value);
         }
 
-        protected override void OnShown(EventArgs e)
+        private void BuildTrayIcon()
         {
-            base.OnShown(e);
-            TryAutoStart();
+            trayIcon = new NotifyIcon();
+            trayIcon.Icon = IconFactory.CreateAppIcon();
+            trayIcon.Text = "Mic Flow";
+            trayIcon.Visible = true;
+            trayIcon.DoubleClick += delegate { ShowFromTray(); };
+
+            ContextMenuStrip menu = new ContextMenuStrip();
+            ToolStripMenuItem toggleItem = new ToolStripMenuItem("Avvia / ferma ascolto");
+            toggleItem.Click += delegate { TogglePower(); };
+            ToolStripMenuItem showItem = new ToolStripMenuItem("Mostra finestra");
+            showItem.Click += delegate { ShowFromTray(); };
+            ToolStripMenuItem exitItem = new ToolStripMenuItem("Esci");
+            exitItem.Click += delegate { exitRequested = true; Close(); };
+
+            menu.Items.Add(toggleItem);
+            menu.Items.Add(showItem);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(exitItem);
+            trayIcon.ContextMenuStrip = menu;
         }
 
-        private void TryAutoStart()
+        private void ShowFromTray()
         {
-            if (autoStartAttempted) return;
-            autoStartAttempted = true;
-            if (settings.AutoStartMonitoring && !engine.IsRunning) StartMonitoring();
-        }
-
-        protected override void WndProc(ref Message m)
-        {
-            if (m.Msg == (int)Program.ShowMessage)
+            Show();
+            ShowInTaskbar = true;
+            if (WindowState == FormWindowState.Minimized)
             {
-                ShowFromTray();
-                return;
+                WindowState = settings.Maximized ? FormWindowState.Maximized : FormWindowState.Normal;
             }
-            base.WndProc(ref m);
+            Activate();
+            BringToFront();
         }
 
         #endregion
 
-        #region Settings binding
+        #region WebView
 
-        private void ApplySettingsToUi()
+        private async void InitialiseWebView()
         {
-            volumeSlider.Value = settings.Volume;
-            latencySlider.Value = settings.Latency;
-            gateSlider.Value = settings.Gate;
-            autoMonitorToggle.Checked = settings.AutoStartMonitoring;
-            startupToggle.Checked = WindowsStartup.IsEnabled();
+            webView = new WebView2();
+            webView.Dock = DockStyle.Fill;
+            webView.DefaultBackgroundColor = Color.FromArgb(0x0C, 0x0E, 0x12);
+            Controls.Add(webView);
 
-            // An empty id means "never chosen": keep the system default that
-            // RefreshDevices already selected instead of falling back to item 0.
-            if (!string.IsNullOrEmpty(settings.InputDeviceId)) SelectDevice(inputSelect, settings.InputDeviceId);
-            if (!string.IsNullOrEmpty(settings.OutputDeviceId)) SelectDevice(outputSelect, settings.OutputDeviceId);
+            try
+            {
+                string userData = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "MicMonitor", "webview");
+                Directory.CreateDirectory(userData);
 
-            UpdateVolumeReadout();
-            UpdateLatencyReadout();
-            UpdateGateReadout();
+                CoreWebView2EnvironmentOptions options = new CoreWebView2EnvironmentOptions();
+                options.AdditionalBrowserArguments = "--disable-features=msWebOOUI,msPdfOOUI --autoplay-policy=no-user-gesture-required";
+
+                CoreWebView2Environment environment = await CoreWebView2Environment.CreateAsync(null, userData, options);
+                await webView.EnsureCoreWebView2Async(environment);
+
+                CoreWebView2Settings browser = webView.CoreWebView2.Settings;
+                browser.AreDefaultContextMenusEnabled = false;
+                browser.AreDevToolsEnabled = false;
+                browser.IsStatusBarEnabled = false;
+                browser.IsZoomControlEnabled = false;
+                browser.AreBrowserAcceleratorKeysEnabled = false;
+
+                webView.CoreWebView2.WebMessageReceived += OnWebMessage;
+                webView.CoreWebView2.NavigateToString(LoadUi());
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "WebView2 non è disponibile su questo PC.\r\n\r\n" + ex.Message +
+                    "\r\n\r\nInstalla \"Microsoft Edge WebView2 Runtime\" e riapri l'app.",
+                    "Mic Flow", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Close();
+            }
         }
 
-        private static void SelectDevice(ComboBox combo, string deviceId)
+        private static string LoadUi()
         {
-            if (combo.Items.Count == 0) return;
-
-            if (!string.IsNullOrEmpty(deviceId))
+            using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("app.html"))
             {
-                for (int i = 0; i < combo.Items.Count; i++)
+                if (stream == null) return "<html><body style='background:#0c0e12;color:#fff'>UI mancante</body></html>";
+                using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
                 {
-                    DeviceItem item = combo.Items[i] as DeviceItem;
-                    if (item != null && item.Id == deviceId)
-                    {
-                        combo.SelectedIndex = i;
-                        return;
-                    }
+                    return reader.ReadToEnd();
                 }
             }
-            combo.SelectedIndex = 0;
         }
 
-        private void PersistSettings()
+        private void Post(string payload)
         {
-            DeviceItem input = inputSelect.SelectedItem as DeviceItem;
-            DeviceItem output = outputSelect.SelectedItem as DeviceItem;
+            if (!bridgeReady || webView == null || webView.CoreWebView2 == null) return;
+            try { webView.CoreWebView2.PostWebMessageAsJson(payload); }
+            catch (Exception) { }
+        }
 
-            settings.InputDeviceId = input == null ? "" : input.Id;
-            settings.OutputDeviceId = output == null ? "" : output.Id;
-            settings.Volume = volumeSlider.Value;
-            settings.Latency = latencySlider.Value;
-            settings.Gate = gateSlider.Value;
-            settings.AutoStartMonitoring = autoMonitorToggle.Checked;
-            settings.Save();
+        private void Toast(string text, bool error)
+        {
+            StringBuilder builder = new StringBuilder();
+            builder.Append("{\"type\":\"toast\",\"text\":").Append(JsonString(text));
+            builder.Append(",\"error\":").Append(error ? "true" : "false").Append('}');
+            Post(builder.ToString());
         }
 
         #endregion
 
-        #region Devices
+        #region Bridge - incoming
+
+        private void OnWebMessage(object sender, CoreWebView2WebMessageReceivedEventArgs e)
+        {
+            Dictionary<string, object> message;
+            try
+            {
+                message = json.Deserialize<Dictionary<string, object>>(e.TryGetWebMessageAsString());
+            }
+            catch (Exception)
+            {
+                return;
+            }
+            if (message == null || !message.ContainsKey("cmd")) return;
+
+            string command = Convert.ToString(message["cmd"], CultureInfo.InvariantCulture);
+
+            switch (command)
+            {
+                case "ready":
+                    bridgeReady = true;
+                    PushState();
+                    meterTimer.Start();
+                    break;
+
+                case "window":
+                    HandleWindowCommand(Convert.ToString(message["action"], CultureInfo.InvariantCulture));
+                    break;
+
+                case "power":
+                    TogglePower();
+                    break;
+
+                case "rescan":
+                    if (engine.IsRunning)
+                    {
+                        Toast("Ferma l'ascolto prima di rileggere i dispositivi", true);
+                    }
+                    else
+                    {
+                        RefreshDevices();
+                        statusMessage = "Elenco dispositivi aggiornato";
+                        PushState();
+                        Toast("Dispositivi aggiornati", false);
+                    }
+                    break;
+
+                case "setInput":
+                    selectedInputId = Convert.ToString(message["id"], CultureInfo.InvariantCulture);
+                    Persist();
+                    PushState();
+                    break;
+
+                case "setOutput":
+                    selectedOutputId = Convert.ToString(message["id"], CultureInfo.InvariantCulture);
+                    Persist();
+                    PushState();
+                    break;
+
+                case "setVolume":
+                    settings.Volume = Clamp(ToInt(message["value"]), 0, 200);
+                    ApplyGain();
+                    Persist();
+                    break;
+
+                case "nudgeGain":
+                    settings.GainDb = Clamp(settings.GainDb + ToInt(message["delta"]), -20, 30);
+                    ApplyGain();
+                    Persist();
+                    PushState();
+                    break;
+
+                case "setLatency":
+                    settings.Latency = Clamp(ToInt(message["value"]), 5, 120);
+                    Persist();
+                    if (engine.IsRunning) StartMonitoring();
+                    else PushState();
+                    break;
+
+                case "setGate":
+                    settings.Gate = Clamp(ToInt(message["value"]), 0, 50);
+                    engine.GateThreshold = GateThreshold();
+                    Persist();
+                    break;
+
+                case "mute":
+                    engine.Muted = !engine.Muted;
+                    PushState();
+                    break;
+
+                case "resetPeak":
+                    engine.ResetCounters();
+                    break;
+
+                case "toggle":
+                    HandleToggle(Convert.ToString(message["name"], CultureInfo.InvariantCulture),
+                                 Convert.ToBoolean(message["value"]));
+                    break;
+            }
+        }
+
+        private void HandleWindowCommand(string action)
+        {
+            switch (action)
+            {
+                case "drag":
+                    if (WindowState == FormWindowState.Maximized) return;
+                    ReleaseCapture();
+                    SendMessage(Handle, WmNcLButtonDown, new IntPtr(HtCaption), IntPtr.Zero);
+                    break;
+                case "min":
+                    WindowState = FormWindowState.Minimized;
+                    break;
+                case "max":
+                    WindowState = WindowState == FormWindowState.Maximized
+                        ? FormWindowState.Normal
+                        : FormWindowState.Maximized;
+                    settings.Maximized = WindowState == FormWindowState.Maximized;
+                    Padding = new Padding(settings.Maximized ? 0 : 1);
+                    Persist();
+                    break;
+                case "close":
+                    Close();
+                    break;
+            }
+        }
+
+        private void HandleToggle(string name, bool value)
+        {
+            switch (name)
+            {
+                case "limiter":
+                    settings.Limiter = value;
+                    engine.Limiter = value;
+                    break;
+                case "startup":
+                    WindowsStartup.SetEnabled(value);
+                    Toast(value ? "Mic Flow partirà con Windows" : "Avvio automatico disattivato", false);
+                    break;
+                case "tray":
+                    settings.MinimizeToTray = value;
+                    break;
+                case "autostart":
+                    settings.AutoStartMonitoring = value;
+                    break;
+            }
+            Persist();
+            PushState();
+        }
+
+        private static int ToInt(object value)
+        {
+            return value == null ? 0 : Convert.ToInt32(value, CultureInfo.InvariantCulture);
+        }
+
+        private static int Clamp(int value, int low, int high)
+        {
+            return value < low ? low : value > high ? high : value;
+        }
+
+        #endregion
+
+        #region Bridge - outgoing
+
+        private void PushState()
+        {
+            StringBuilder b = new StringBuilder(1024);
+            b.Append("{\"type\":\"state\"");
+            b.Append(",\"running\":").Append(engine.IsRunning ? "true" : "false");
+            b.Append(",\"volume\":").Append(settings.Volume);
+            b.Append(",\"latency\":").Append(settings.Latency);
+            b.Append(",\"gate\":").Append(settings.Gate);
+            b.Append(",\"gainDb\":").Append(settings.GainDb.ToString("0.0", CultureInfo.InvariantCulture));
+            b.Append(",\"limiter\":").Append(settings.Limiter ? "true" : "false");
+            b.Append(",\"tray\":").Append(settings.MinimizeToTray ? "true" : "false");
+            b.Append(",\"autostart\":").Append(settings.AutoStartMonitoring ? "true" : "false");
+            b.Append(",\"startup\":").Append(WindowsStartup.IsEnabled() ? "true" : "false");
+            b.Append(",\"muted\":").Append(engine.Muted ? "true" : "false");
+            b.Append(",\"dropouts\":").Append(engine.Dropouts);
+
+            b.Append(",\"inRate\":").Append(engine.IsRunning ? engine.InputSampleRate : 0);
+            b.Append(",\"inChannels\":").Append(engine.IsRunning ? engine.InputChannels : 0);
+            b.Append(",\"inBits\":").Append(engine.IsRunning ? engine.InputBits : 0);
+            b.Append(",\"outRate\":").Append(engine.IsRunning ? engine.OutputSampleRate : 0);
+            b.Append(",\"outChannels\":").Append(engine.IsRunning ? engine.OutputChannels : 0);
+            b.Append(",\"inDefault\":").Append(IsDefaultDevice(inputDevices, selectedInputId) ? "true" : "false");
+            b.Append(",\"outDefault\":").Append(IsDefaultDevice(outputDevices, selectedOutputId) ? "true" : "false");
+
+            b.Append(",\"inputId\":").Append(JsonString(selectedInputId));
+            b.Append(",\"outputId\":").Append(JsonString(selectedOutputId));
+            b.Append(",\"message\":").Append(JsonString(statusMessage));
+
+            b.Append(",\"devices\":{\"inputs\":");
+            AppendDevices(b, inputDevices);
+            b.Append(",\"outputs\":");
+            AppendDevices(b, outputDevices);
+            b.Append("}}");
+
+            Post(b.ToString());
+        }
+
+        private static void AppendDevices(StringBuilder b, List<DeviceItem> devices)
+        {
+            b.Append('[');
+            for (int i = 0; i < devices.Count; i++)
+            {
+                if (i > 0) b.Append(',');
+                b.Append("{\"id\":").Append(JsonString(devices[i].Id));
+                b.Append(",\"name\":").Append(JsonString(devices[i].Name));
+                b.Append(",\"def\":").Append(devices[i].IsDefault ? "true" : "false").Append('}');
+            }
+            b.Append(']');
+        }
+
+        private static bool IsDefaultDevice(List<DeviceItem> devices, string id)
+        {
+            foreach (DeviceItem device in devices)
+            {
+                if (device.Id == id) return device.IsDefault;
+            }
+            return false;
+        }
+
+        private void OnMeterTick(object sender, EventArgs e)
+        {
+            if (!bridgeReady) return;
+
+            double peakLeft, peakRight, rms, correlation, floor;
+            engine.Meter.Read(out peakLeft, out peakRight, out rms, out correlation, out floor);
+
+            if (!engine.IsRunning)
+            {
+                peakLeft = -90; peakRight = -90; rms = -90;
+            }
+
+            float[] bands = engine.IsRunning ? engine.Spectrum.Analyze() : null;
+
+            StringBuilder b = new StringBuilder(1200);
+            b.Append("{\"type\":\"meters\"");
+            b.Append(",\"peakL\":").Append(Num(peakLeft));
+            b.Append(",\"peakR\":").Append(Num(peakRight));
+            b.Append(",\"rms\":").Append(Num(rms));
+            b.Append(",\"corr\":").Append(Num(correlation));
+            b.Append(",\"floor\":").Append(Num(floor));
+            b.Append(",\"gr\":").Append(Num(engine.GateReductionDb));
+            b.Append(",\"load\":").Append(Num(engine.LoadPercent));
+            b.Append(",\"drops\":").Append(engine.Dropouts);
+            b.Append(",\"dominant\":").Append(Num(engine.IsRunning ? engine.Spectrum.DominantHz : 0f));
+            b.Append(",\"bands\":[");
+            for (int i = 0; i < SpectrumAnalyzer.BandCount; i++)
+            {
+                if (i > 0) b.Append(',');
+                b.Append(Num(bands == null ? 0f : bands[i]));
+            }
+            b.Append("]}");
+
+            Post(b.ToString());
+        }
+
+        private static string Num(double value)
+        {
+            if (double.IsNaN(value) || double.IsInfinity(value)) return "0";
+            return value.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        private static string JsonString(string value)
+        {
+            if (value == null) return "null";
+            StringBuilder b = new StringBuilder(value.Length + 8);
+            b.Append('"');
+            foreach (char c in value)
+            {
+                switch (c)
+                {
+                    case '"': b.Append("\\\""); break;
+                    case '\\': b.Append("\\\\"); break;
+                    case '\n': b.Append("\\n"); break;
+                    case '\r': b.Append("\\r"); break;
+                    case '\t': b.Append("\\t"); break;
+                    default:
+                        if (c < ' ') b.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                        else b.Append(c);
+                        break;
+                }
+            }
+            b.Append('"');
+            return b.ToString();
+        }
+
+        #endregion
+
+        #region Devices and monitoring
 
         private void RefreshDevices()
         {
-            string previousInput = SelectedId(inputSelect);
-            string previousOutput = SelectedId(outputSelect);
-
             List<DeviceItem> inputs = new List<DeviceItem>();
             List<DeviceItem> outputs = new List<DeviceItem>();
-            string defaultInputId = null;
-            string defaultOutputId = null;
+            string defaultInputId = null, defaultOutputId = null;
 
             try
             {
@@ -1901,119 +1619,83 @@ namespace MicMonitor
 
                 foreach (MMDevice device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
                 {
-                    inputs.Add(new DeviceItem(device.ID, Decorate(device.FriendlyName, device.ID == defaultInputId)));
+                    inputs.Add(new DeviceItem(device.ID, device.FriendlyName, device.ID == defaultInputId));
                 }
                 foreach (MMDevice device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
                 {
-                    outputs.Add(new DeviceItem(device.ID, Decorate(device.FriendlyName, device.ID == defaultOutputId)));
+                    outputs.Add(new DeviceItem(device.ID, device.FriendlyName, device.ID == defaultOutputId));
                 }
             }
             catch (Exception ex)
             {
-                SetStatus("DISPOSITIVI NON LEGGIBILI: " + ex.Message, Theme.Red);
+                statusMessage = "Dispositivi non leggibili: " + ex.Message;
             }
 
-            bool wasLoading = loadingSettings;
-            loadingSettings = true;
+            inputDevices = inputs;
+            outputDevices = outputs;
 
-            inputSelect.Items.Clear();
-            foreach (DeviceItem item in inputs) inputSelect.Items.Add(item);
-            outputSelect.Items.Clear();
-            foreach (DeviceItem item in outputs) outputSelect.Items.Add(item);
-
-            SelectDevice(inputSelect, previousInput ?? defaultInputId);
-            SelectDevice(outputSelect, previousOutput ?? defaultOutputId);
-
-            loadingSettings = wasLoading;
+            selectedInputId = PickDevice(inputs, selectedInputId ?? settings.InputDeviceId, defaultInputId);
+            selectedOutputId = PickDevice(outputs, selectedOutputId ?? settings.OutputDeviceId, defaultOutputId);
         }
 
-        private static string Decorate(string name, bool isDefault)
+        private static string PickDevice(List<DeviceItem> devices, string preferred, string fallback)
         {
-            return isDefault ? name + "  ·  predefinito" : name;
+            if (devices.Count == 0) return null;
+            if (!string.IsNullOrEmpty(preferred))
+            {
+                foreach (DeviceItem device in devices)
+                {
+                    if (device.Id == preferred) return preferred;
+                }
+            }
+            if (!string.IsNullOrEmpty(fallback))
+            {
+                foreach (DeviceItem device in devices)
+                {
+                    if (device.Id == fallback) return fallback;
+                }
+            }
+            return devices[0].Id;
         }
 
-        private static string SelectedId(ComboBox combo)
+        private void TogglePower()
         {
-            if (combo == null) return null;
-            DeviceItem item = combo.SelectedItem as DeviceItem;
-            return item == null ? null : item.Id;
-        }
-
-        #endregion
-
-        #region Monitoring
-
-        private void OnPowerClicked(object sender, EventArgs e)
-        {
-            ToggleMonitoring();
-        }
-
-        private void ToggleMonitoring()
-        {
-            if (engine.IsRunning) StopMonitoring("ASCOLTO FERMATO");
+            if (engine.IsRunning) StopMonitoring("Ascolto fermato");
             else StartMonitoring();
         }
 
         private void StartMonitoring()
         {
-            string inputId = SelectedId(inputSelect);
-            string outputId = SelectedId(outputSelect);
-
-            if (string.IsNullOrEmpty(inputId) || string.IsNullOrEmpty(outputId))
+            if (string.IsNullOrEmpty(selectedInputId) || string.IsNullOrEmpty(selectedOutputId))
             {
-                SetStatus("SELEZIONA MICROFONO E USCITA", Theme.Amber);
+                Toast("Seleziona microfono e uscita", true);
                 return;
             }
 
             try
             {
-                engine.Start(inputId, outputId, latencySlider.Value, GainFromSlider(), GateFromSlider(), false);
+                engine.Start(selectedInputId, selectedOutputId, settings.Latency,
+                    LinearGain(), GateThreshold(), engine.Muted, settings.Limiter);
             }
             catch (Exception ex)
             {
                 engine.Stop();
-                UpdatePowerButton();
-                SetStatus("ERRORE: " + ex.Message.ToUpperInvariant(), Theme.Red);
+                statusMessage = "Errore: " + ex.Message;
+                PushState();
+                Toast(ex.Message, true);
                 return;
             }
 
-            UpdatePowerButton();
-            PersistSettings();
-            signalLabel.Text = engine.InputFormatText.ToUpperInvariant();
-            signalLabel.Color = Theme.TealLow;
-            SetStatus(string.Format(CultureInfo.InvariantCulture, "IN ASCOLTO  ·  {0} -> {1}  ·  BUFFER {2} MS",
-                engine.InputFormatText, engine.OutputFormatText, engine.LatencyMilliseconds).ToUpperInvariant(),
-                Theme.Teal);
+            statusMessage = "In ascolto";
+            Persist();
+            PushState();
         }
 
         private void StopMonitoring(string message)
         {
             engine.Stop();
-            meter.Reset();
-            UpdatePowerButton();
-            signalLabel.Text = "STANDBY";
-            signalLabel.Color = Theme.Faint;
-            SetStatus(message, Theme.Dim);
-        }
-
-        private void UpdatePowerButton()
-        {
-            bool running = engine.IsRunning;
-
-            powerButton.Text = running ? "FERMA ASCOLTO" : "AVVIA ASCOLTO";
-            powerButton.Glyph = running ? Glyphs.Stop : Glyphs.Play;
-            powerButton.GradientTop = running ? Color.FromArgb(0xFF, 0x6B, 0x6B) : Color.FromArgb(0x00, 0xF5, 0xCE);
-            powerButton.GradientBottom = running ? Theme.RedDeep : Theme.TealDeep;
-            powerButton.Base = running ? Color.FromArgb(0x7A, 0x1E, 0x1E) : Color.FromArgb(0x00, 0x5F, 0x51);
-            powerButton.Face = running ? Color.FromArgb(0x2B, 0x0A, 0x0C) : Color.FromArgb(0x04, 0x23, 0x1E);
-            powerButton.Invalidate();
-
-            inputSelect.Enabled = !running;
-            outputSelect.Enabled = !running;
-
-            if (trayIcon != null) trayIcon.Text = running ? "Mic Monitor - in ascolto" : "Mic Monitor";
-
-            Invalidate(new Rectangle(0, 0, Width, TitleBarHeight));
+            statusMessage = message;
+            PushState();
         }
 
         private void OnEngineStopped(object sender, AudioEngineStoppedEventArgs e)
@@ -2023,145 +1705,76 @@ namespace MicMonitor
                 BeginInvoke(new EventHandler<AudioEngineStoppedEventArgs>(OnEngineStopped), sender, e);
                 return;
             }
-            StopMonitoring("INTERROTTO: " +
-                (e.Error == null ? "DISPOSITIVO NON DISPONIBILE" : e.Error.Message.ToUpperInvariant()));
+            StopMonitoring("Interrotto: " + (e.Error == null ? "dispositivo non disponibile" : e.Error.Message));
+            Toast("Ascolto interrotto: dispositivo non disponibile", true);
         }
 
-        private float GainFromSlider()
+        private void TryAutoStart()
         {
-            return volumeSlider.Value / 100f;
+            if (autoStartAttempted) return;
+            autoStartAttempted = true;
+            if (settings.AutoStartMonitoring && !engine.IsRunning) StartMonitoring();
+        }
+
+        private float LinearGain()
+        {
+            double preamp = Math.Pow(10.0, settings.GainDb / 20.0);
+            return (float)(preamp * settings.Volume / 100.0);
+        }
+
+        private void ApplyGain()
+        {
+            engine.Gain = LinearGain();
         }
 
         /// <summary>Maps the gate slider (0 = off, 1..50) to a linear threshold.</summary>
-        private float GateFromSlider()
+        private float GateThreshold()
         {
-            int value = gateSlider.Value;
-            if (value <= 0) return 0f;
-            double db = -70.0 + (value / 50.0) * 45.0; // -70 dB .. -25 dB
+            if (settings.Gate <= 0) return 0f;
+            double db = -70.0 + (settings.Gate / 50.0) * 45.0;
             return (float)Math.Pow(10.0, db / 20.0);
+        }
+
+        private void Persist()
+        {
+            settings.InputDeviceId = selectedInputId ?? "";
+            settings.OutputDeviceId = selectedOutputId ?? "";
+            if (WindowState == FormWindowState.Normal)
+            {
+                settings.WindowWidth = Width;
+                settings.WindowHeight = Height;
+                settings.WindowX = Location.X;
+                settings.WindowY = Location.Y;
+            }
+            settings.Save();
         }
 
         #endregion
 
-        #region Event handlers
+        #region Lifetime
 
-        private void OnVolumeChanged(object sender, EventArgs e)
+        protected override void OnResizeEnd(EventArgs e)
         {
-            UpdateVolumeReadout();
-            engine.Gain = GainFromSlider();
-            if (!loadingSettings) PersistSettings();
-        }
-
-        private void OnLatencyChanged(object sender, EventArgs e)
-        {
-            UpdateLatencyReadout();
-            if (loadingSettings) return;
-            PersistSettings();
-            if (engine.IsRunning)
-            {
-                // The buffer size is fixed when the WASAPI clients are created,
-                // so the pair has to be rebuilt for the new value to take effect.
-                StartMonitoring();
-            }
-        }
-
-        private void OnGateChanged(object sender, EventArgs e)
-        {
-            UpdateGateReadout();
-            engine.GateThreshold = GateFromSlider();
-            if (!loadingSettings) PersistSettings();
-        }
-
-        private void OnDeviceSelectionChanged(object sender, EventArgs e)
-        {
-            if (loadingSettings) return;
-            PersistSettings();
-        }
-
-        private void OnAutoMonitorChanged(object sender, EventArgs e)
-        {
-            if (loadingSettings) return;
-            PersistSettings();
-        }
-
-        private void OnStartupChanged(object sender, EventArgs e)
-        {
-            if (loadingSettings) return;
-            WindowsStartup.SetEnabled(startupToggle.Checked);
-        }
-
-        private void OnRescanClicked(object sender, EventArgs e)
-        {
-            if (engine.IsRunning)
-            {
-                SetStatus("FERMA L'ASCOLTO PRIMA DI AGGIORNARE", Theme.Amber);
-                return;
-            }
-            RefreshDevices();
-            SetStatus("ELENCO DISPOSITIVI AGGIORNATO", Theme.Dim);
-        }
-
-        private void UpdateVolumeReadout()
-        {
-            volumeReadout.Text = volumeSlider.Value.ToString(CultureInfo.InvariantCulture) + " %";
-        }
-
-        private void UpdateLatencyReadout()
-        {
-            latencyReadout.Text = latencySlider.Value.ToString(CultureInfo.InvariantCulture) + " ms";
-        }
-
-        private void UpdateGateReadout()
-        {
-            if (gateSlider.Value <= 0)
-            {
-                gateReadout.Text = "OFF";
-                gateReadout.Color = Theme.Faint;
-                return;
-            }
-            double db = -70.0 + (gateSlider.Value / 50.0) * 45.0;
-            gateReadout.Color = Theme.Text;
-            gateReadout.Text = db.ToString("0", CultureInfo.InvariantCulture) + " dB";
-        }
-
-        private void SetStatus(string text, Color color)
-        {
-            statusLabel.Text = text;
-            statusLabel.Color = color == Theme.Teal ? Theme.Dim : color;
-            statusLedColor = color;
-            Invalidate(new Rectangle(0, 616, Width, 30));
-        }
-
-        private void OnUiTick(object sender, EventArgs e)
-        {
-            if (!engine.IsRunning) return;
-            if (WindowState == FormWindowState.Minimized || !Visible) return;
-            meter.Push(engine.ReadAndResetPeak());
-        }
-
-        private void ShowFromTray()
-        {
-            Show();
-            ShowInTaskbar = true;
-            WindowState = FormWindowState.Normal;
-            Activate();
-            BringToFront();
+            base.OnResizeEnd(e);
+            Persist();
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (!exitRequested && e.CloseReason == CloseReason.UserClosing && settings.MinimizeToTray && engine.IsRunning)
+            if (!exitRequested && e.CloseReason == CloseReason.UserClosing &&
+                settings.MinimizeToTray && engine.IsRunning)
             {
                 e.Cancel = true;
                 Hide();
                 ShowInTaskbar = false;
-                trayIcon.ShowBalloonTip(2000, "Mic Monitor",
+                trayIcon.ShowBalloonTip(2000, "Mic Flow",
                     "L'ascolto continua in background. Clicca l'icona per riaprire.", ToolTipIcon.Info);
                 return;
             }
 
-            PersistSettings();
-            uiTimer.Stop();
+            settings.Maximized = WindowState == FormWindowState.Maximized;
+            Persist();
+            meterTimer.Stop();
             engine.Stop();
             if (trayIcon != null)
             {
@@ -2187,22 +1800,21 @@ namespace MicMonitor
             {
                 using (Graphics g = Graphics.FromImage(bitmap))
                 {
-                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                     g.Clear(Color.Transparent);
 
-                    using (SolidBrush brush = new SolidBrush(Theme.Teal))
-                    using (Pen pen = new Pen(Theme.Teal, 2.4f))
+                    Color accent = Color.FromArgb(0xFF, 0x6B, 0x00);
+                    using (Pen pen = new Pen(accent, 2.6f))
                     {
-                        pen.StartCap = LineCap.Round;
-                        pen.EndCap = LineCap.Round;
+                        pen.StartCap = System.Drawing.Drawing2D.LineCap.Round;
+                        pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
 
-                        using (GraphicsPath capsule = Theme.RoundedRect(new Rectangle(12, 5, 8, 15), 4))
-                        {
-                            g.FillPath(brush, capsule);
-                        }
-                        g.DrawArc(pen, 7, 10, 18, 15, 20, 140);
-                        g.DrawLine(pen, 16, 25, 16, 28);
-                        g.DrawLine(pen, 11, 28, 21, 28);
+                        // Waveform bars, matching the header mark in the UI.
+                        g.DrawLine(pen, 5, 13, 5, 19);
+                        g.DrawLine(pen, 11, 8, 11, 24);
+                        g.DrawLine(pen, 16, 3, 16, 29);
+                        g.DrawLine(pen, 21, 9, 21, 23);
+                        g.DrawLine(pen, 27, 13, 27, 19);
                     }
                 }
 
