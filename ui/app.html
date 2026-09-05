@@ -315,6 +315,34 @@ input[type=range][disabled]{opacity:.5}
 #statusbar .grow{flex:1}
 #load-track{width:74px;height:5px;border-radius:3px;background:var(--slate);overflow:hidden}
 #load-fill{height:100%;width:0;border-radius:3px;background:linear-gradient(90deg,var(--green),var(--amber));transition:width .3s}
+/* ============================================================
+   Modalità prestazioni
+   ============================================================ */
+#perf-note{display:none}
+body.perf #perf-note{
+  display:flex;align-items:center;gap:9px;
+  font-family:var(--mono);font-size:10px;letter-spacing:.05em;color:var(--muted);
+  background:rgba(255,107,0,.07);border:1px solid rgba(255,107,0,.22);
+  border-radius:7px;padding:9px 12px;
+  animation:rise .4s cubic-bezier(.2,.7,.3,1) both;
+}
+#perf-note svg{color:var(--orange);flex:none}
+#perf-note b{color:var(--text);font-weight:600}
+
+/* Tutto quello che non serve al passthrough sparisce. */
+body.perf #flow,
+body.perf #hero-right .togglerow:first-child,
+body.perf .perf-hide{display:none !important}
+
+body.perf #content{max-width:900px;margin:0 auto;width:100%}
+body.perf #meters-grid{grid-template-columns:1fr}
+/* Le due schede dei dispositivi restano affiancate anche in finestra stretta:
+   in prestazioni servono poche schede, meglio larghe che impilate. */
+@media(min-width:720px){ body.perf #devices-grid{grid-template-columns:1fr 1fr} }
+body.perf #hero{flex-direction:column;align-items:stretch}
+body.perf #power-box{min-width:0}
+body.perf #statusbar .perf-hide{display:none}
+
 #toast{
   position:fixed;left:50%;bottom:52px;transform:translate(-50%,20px);opacity:0;pointer-events:none;
   padding:9px 16px;border-radius:7px;font-size:12px;font-weight:600;
@@ -367,10 +395,10 @@ input[type=range][disabled]{opacity:.5}
         <path d="M3 12h3l3-7 4 14 3-9h5"/></svg>
       Monitoraggio Diretto
     </span>
-    <span class="tab" data-tab="settings">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-        <circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
-      Impostazioni
+    <span class="tab" data-tab="perf">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 2L4.5 13H11l-1 9 8.5-11H12l1-9z"/></svg>
+      Modalità Prestazioni
     </span>
     <span class="spacer"></span>
     <span class="chip" id="driver-chip">Nessun driver virtuale</span>
@@ -424,7 +452,7 @@ input[type=range][disabled]{opacity:.5}
           </span>
         </div>
         <div class="togglerow">
-          <span class="toggle" data-toggle="autostart">
+          <span class="toggle perf-hide" data-toggle="autostart">
             <span class="box"><svg width="10" height="10" viewBox="0 0 12 12"><path d="M1.5 6.2l3 3 6-6.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
             AVVIA ASCOLTO ALL'APERTURA
           </span>
@@ -437,8 +465,15 @@ input[type=range][disabled]{opacity:.5}
       </div>
     </div>
 
+    <div id="perf-note">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 2L4.5 13H11l-1 9 8.5-11H12l1-9z"/></svg>
+      <span><b>Modalità prestazioni.</b> Restano microfono, uscita e livello di ascolto.
+      Spettro, VU meter e analisi del segnale sono sospesi: l'audio passa uguale, il PC lavora meno.</span>
+    </div>
+
     <!-- ---------- devices ---------- -->
-    <div class="grid g2">
+    <div class="grid g2" id="devices-grid">
       <div class="card">
         <div class="card-head">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -459,7 +494,7 @@ input[type=range][disabled]{opacity:.5}
           </div>
         </div>
 
-        <div class="devrow" style="margin-top:11px;margin-bottom:0">
+        <div class="devrow perf-hide" style="margin-top:11px;margin-bottom:0">
           <span class="label">Guadagno preamp</span>
           <span class="stepper">
             <button data-gain="-1" title="Meno 1 dB">−</button>
@@ -501,8 +536,8 @@ input[type=range][disabled]{opacity:.5}
     </div>
 
     <!-- ---------- meters + controls ---------- -->
-    <div class="grid g2">
-      <div style="display:flex;flex-direction:column;gap:12px">
+    <div class="grid g2" id="meters-grid">
+      <div style="display:flex;flex-direction:column;gap:12px" class="perf-hide">
 
         <div class="card">
           <div class="card-head">
@@ -564,7 +599,7 @@ input[type=range][disabled]{opacity:.5}
           </div>
         </div>
 
-        <div class="card">
+        <div class="card perf-hide">
           <div class="card-head">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <path d="M13 2L4.5 13H11l-1 9 8.5-11H12l1-9z"/></svg>
@@ -585,7 +620,7 @@ input[type=range][disabled]{opacity:.5}
           </div>
         </div>
 
-        <div class="card">
+        <div class="card perf-hide">
           <div class="card-head">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <path d="M3 4h18l-7 8v7l-4 2v-9L3 4z"/></svg>
@@ -610,13 +645,13 @@ input[type=range][disabled]{opacity:.5}
 
   <!-- ==================== STATUS BAR ==================== -->
   <div id="statusbar">
-    <span>Carico DSP</span>
-    <span id="load-track"><span id="load-fill"></span></span>
-    <b id="load-val">0%</b>
-    <span>·</span>
+    <span class="perf-hide">Carico DSP</span>
+    <span id="load-track" class="perf-hide"><span id="load-fill"></span></span>
+    <b id="load-val" class="perf-hide">0%</b>
+    <span class="perf-hide">·</span>
     <span>Buffer <b id="sb-buffer">--</b></span>
-    <span>·</span>
-    <span>Interruzioni <b id="sb-drops">0</b></span>
+    <span class="perf-hide">·</span>
+    <span class="perf-hide">Interruzioni <b id="sb-drops">0</b></span>
     <span class="grow"></span>
     <span id="sb-msg">Pronto</span>
   </div>
@@ -655,12 +690,30 @@ $('drag-zone').addEventListener('mousedown', function(e){
 });
 $('drag-zone').addEventListener('dblclick', function(){ send({cmd:'window', action:'max'}); });
 
+/* ============================================================
+   Modalità prestazioni: solo sorgente, destinazione e livello.
+   Il resto della pagina sparisce e l'host smette di calcolare
+   FFT e metering, che sono la parte cara del lavoro.
+   ============================================================ */
+let perfMode = false;
+
+function setPerfMode(on, silent){
+  perfMode = !!on;
+  document.body.classList.toggle('perf', perfMode);
+  document.querySelectorAll('.tab').forEach(function(t){
+    t.classList.toggle('active', (t.dataset.tab === 'perf') === perfMode);
+  });
+  if(!silent) send({cmd:'perfMode', value: perfMode});
+  window.dispatchEvent(new Event('resize'));
+}
+
 document.querySelectorAll('.tab').forEach(function(tab){
   tab.addEventListener('click', function(){
     if(tab.classList.contains('active')) return;
-    document.querySelector('.tab.active').classList.remove('active');
-    tab.classList.add('active');
-    if(tab.dataset.tab === 'settings') toast('Le impostazioni sono già tutte qui nella schermata principale');
+    setPerfMode(tab.dataset.tab === 'perf');
+    toast(perfMode
+      ? 'Modalità prestazioni: analisi del segnale sospesa'
+      : 'Monitoraggio completo ripristinato');
   });
 });
 
@@ -931,6 +984,13 @@ function drawRing(){
    Animation loop
    ============================================================ */
 function frame(){
+  if(perfMode){
+    // Restano solo l'anello del volume: spettro e VU non sono a schermo.
+    ringShown += (ringTarget - ringShown) * .18;
+    drawRing();
+    requestAnimationFrame(frame);
+    return;
+  }
   for(let i = 0; i < spectrum.length; i++){
     const target = spectrum[i];
     spectrumShown[i] += (target - spectrumShown[i]) * (target > spectrumShown[i] ? .55 : .12);
@@ -953,6 +1013,8 @@ function fmtDb(v){
 
 function applyState(s){
   const on = !!s.running;
+
+  if(typeof s.perf === 'boolean' && s.perf !== perfMode) setPerfMode(s.perf, true);
 
   $('power-box').className = on ? 'on' : 'off';
   $('hero').classList.toggle('on', on);
@@ -1019,7 +1081,9 @@ function fillSelect(sel, items, selectedId){
     items.forEach(function(item){
       const o = document.createElement('option');
       o.value = item.id;
-      o.textContent = item.name + (item.def ? '  ·  predefinito' : '');
+      o.textContent = item.name
+        + (item.def ? '  ·  predefinito' : '')
+        + (item.st ? '  ·  ' + item.st.toUpperCase() : '');
       sel.appendChild(o);
     });
     sel.dataset.sig = signature;

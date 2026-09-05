@@ -1,4 +1,4 @@
-// Mic Flow - real-time microphone monitoring for Windows.
+﻿// Mic Flow - real-time microphone monitoring for Windows.
 //
 // Routes the selected capture device straight to the selected playback device
 // using WASAPI shared mode. No virtual audio driver is installed, so other
@@ -589,6 +589,12 @@ namespace MicMonitor
         public readonly SpectrumAnalyzer Spectrum = new SpectrumAnalyzer();
         public readonly InputMeter Meter = new InputMeter();
 
+        /// <summary>
+        /// When false the capture callback only forwards audio: no per-sample
+        /// metering and no spectrum window. This is what performance mode turns off.
+        /// </summary>
+        public volatile bool AnalysisEnabled = true;
+
         public bool IsRunning { get { return running; } }
         public int LatencyMilliseconds { get; private set; }
         public int InputSampleRate { get; private set; }
@@ -723,33 +729,36 @@ namespace MicMonitor
             int channels = format.Channels;
             int frames = e.BytesRecorded / (format.BitsPerSample / 8) / channels;
 
-            if (monoScratch.Length < frames) monoScratch = new float[frames];
-
-            bool isFloat = format.Encoding == WaveFormatEncoding.IeeeFloat ||
-                           (format.Encoding == WaveFormatEncoding.Extensible && format.BitsPerSample == 32);
-
-            for (int frame = 0; frame < frames; frame++)
+            if (AnalysisEnabled)
             {
-                float left, right;
-                if (isFloat)
+                if (monoScratch.Length < frames) monoScratch = new float[frames];
+
+                bool isFloat = format.Encoding == WaveFormatEncoding.IeeeFloat ||
+                               (format.Encoding == WaveFormatEncoding.Extensible && format.BitsPerSample == 32);
+
+                for (int frame = 0; frame < frames; frame++)
                 {
-                    int offset = (frame * channels) * 4;
-                    left = BitConverter.ToSingle(e.Buffer, offset);
-                    right = channels > 1 ? BitConverter.ToSingle(e.Buffer, offset + 4) : left;
-                }
-                else
-                {
-                    int offset = (frame * channels) * 2;
-                    left = BitConverter.ToInt16(e.Buffer, offset) / 32768f;
-                    right = channels > 1 ? BitConverter.ToInt16(e.Buffer, offset + 2) / 32768f : left;
+                    float left, right;
+                    if (isFloat)
+                    {
+                        int offset = (frame * channels) * 4;
+                        left = BitConverter.ToSingle(e.Buffer, offset);
+                        right = channels > 1 ? BitConverter.ToSingle(e.Buffer, offset + 4) : left;
+                    }
+                    else
+                    {
+                        int offset = (frame * channels) * 2;
+                        left = BitConverter.ToInt16(e.Buffer, offset) / 32768f;
+                        right = channels > 1 ? BitConverter.ToInt16(e.Buffer, offset + 2) / 32768f : left;
+                    }
+
+                    Meter.Add(left, right);
+                    monoScratch[frame] = channels > 1 ? (left + right) * 0.5f : left;
                 }
 
-                Meter.Add(left, right);
-                monoScratch[frame] = channels > 1 ? (left + right) * 0.5f : left;
+                Meter.Commit();
+                Spectrum.Push(monoScratch, frames);
             }
-
-            Meter.Commit();
-            Spectrum.Push(monoScratch, frames);
 
             if (target.BufferedBytes > maxQueuedBytes)
             {
@@ -856,6 +865,7 @@ namespace MicMonitor
         public bool Limiter = true;
         public bool AutoStartMonitoring = false;
         public bool MinimizeToTray = true;
+        public bool PerformanceMode = false;
         public int WindowWidth = 1180;
         public int WindowHeight = 820;
         public int WindowX = -1;
@@ -896,6 +906,7 @@ namespace MicMonitor
                         case "limiter": settings.Limiter = value != "0"; break;
                         case "autostart": settings.AutoStartMonitoring = value == "1"; break;
                         case "tray": settings.MinimizeToTray = value != "0"; break;
+                        case "perf": settings.PerformanceMode = value == "1"; break;
                         case "w": settings.WindowWidth = ParseInt(value, 1180); break;
                         case "h": settings.WindowHeight = ParseInt(value, 820); break;
                         case "x": settings.WindowX = ParseInt(value, -1); break;
@@ -931,6 +942,7 @@ namespace MicMonitor
                 builder.AppendLine("limiter=" + (Limiter ? "1" : "0"));
                 builder.AppendLine("autostart=" + (AutoStartMonitoring ? "1" : "0"));
                 builder.AppendLine("tray=" + (MinimizeToTray ? "1" : "0"));
+                builder.AppendLine("perf=" + (PerformanceMode ? "1" : "0"));
                 builder.AppendLine("w=" + WindowWidth.ToString(CultureInfo.InvariantCulture));
                 builder.AppendLine("h=" + WindowHeight.ToString(CultureInfo.InvariantCulture));
                 builder.AppendLine("x=" + WindowX.ToString(CultureInfo.InvariantCulture));
@@ -979,13 +991,75 @@ namespace MicMonitor
 
     internal sealed class DeviceItem
     {
-        public DeviceItem(string id, string name, bool isDefault)
+        public DeviceItem(string id, string name, bool isDefault, DeviceState state)
         {
-            Id = id; Name = name; IsDefault = isDefault;
+            Id = id; Name = name; IsDefault = isDefault; State = state;
         }
+
         public string Id { get; private set; }
         public string Name { get; private set; }
         public bool IsDefault { get; private set; }
+        public DeviceState State { get; private set; }
+
+        public bool IsUsable { get { return State == DeviceState.Active; } }
+
+        /// <summary>Empty for a usable device, otherwise why it cannot be opened.</summary>
+        public string StateLabel
+        {
+            get
+            {
+                switch (State)
+                {
+                    case DeviceState.Disabled: return "disattivato in Windows";
+                    case DeviceState.Unplugged: return "scollegato";
+                    case DeviceState.NotPresent: return "non presente";
+                    default: return "";
+                }
+            }
+        }
+    }
+
+    /// <summary>Reads the Windows microphone privacy switches.</summary>
+    internal static class MicrophonePrivacy
+    {
+        private const string ConsentPath =
+            @"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone";
+
+        /// <summary>Null when everything is allowed, otherwise what the user has to change.</summary>
+        public static string Blocked()
+        {
+            if (IsDenied(Registry.LocalMachine, ConsentPath))
+            {
+                return "L'accesso al microfono è disattivato per tutto il PC. " +
+                       "Impostazioni > Privacy e sicurezza > Microfono, attiva \"Accesso al microfono\".";
+            }
+            if (IsDenied(Registry.CurrentUser, ConsentPath))
+            {
+                return "L'accesso al microfono è disattivato per il tuo account. " +
+                       "Impostazioni > Privacy e sicurezza > Microfono, attiva \"Accesso al microfono\".";
+            }
+            if (IsDenied(Registry.CurrentUser, ConsentPath + @"\NonPackaged"))
+            {
+                return "Le app desktop non possono usare il microfono. " +
+                       "Impostazioni > Privacy e sicurezza > Microfono, attiva " +
+                       "\"Consenti alle app desktop di accedere al microfono\".";
+            }
+            return null;
+        }
+
+        private static bool IsDenied(RegistryKey root, string path)
+        {
+            try
+            {
+                using (RegistryKey key = root.OpenSubKey(path, false))
+                {
+                    if (key == null) return false;
+                    string value = key.GetValue("Value") as string;
+                    return string.Equals(value, "Deny", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch (Exception) { return false; }
+        }
     }
 
     internal sealed class MainForm : Form
@@ -1021,6 +1095,10 @@ namespace MicMonitor
         private const int ResizeMargin = 6;
         private const int BaseMinimumWidth = 1000;
         private const int BaseMinimumHeight = 700;
+        private const int PerfMinimumWidth = 620;
+        private const int PerfMinimumHeight = 470;
+        private const int PerfWidth = 880;
+        private const int PerfHeight = 752;
 
         #endregion
 
@@ -1099,11 +1177,14 @@ namespace MicMonitor
 
         private Size ScaledMinimum()
         {
+            // Performance mode drops most of the dashboard, so the window is
+            // allowed to shrink well below the full layout's minimum.
+            int width = settings.PerformanceMode ? PerfMinimumWidth : BaseMinimumWidth;
+            int height = settings.PerformanceMode ? PerfMinimumHeight : BaseMinimumHeight;
+
             using (Graphics g = CreateGraphics())
             {
-                return new Size(
-                    (int)(BaseMinimumWidth * g.DpiX / 96f),
-                    (int)(BaseMinimumHeight * g.DpiY / 96f));
+                return new Size((int)(width * g.DpiX / 96f), (int)(height * g.DpiY / 96f));
             }
         }
 
@@ -1156,7 +1237,9 @@ namespace MicMonitor
                     suggested.Left, suggested.Top,
                     suggested.Right - suggested.Left, suggested.Bottom - suggested.Top,
                     SwpNoZOrder | SwpNoActivate);
-                MinimumSize = new Size(BaseMinimumWidth * dpi / 96, BaseMinimumHeight * dpi / 96);
+                MinimumSize = settings.PerformanceMode
+                    ? new Size(PerfMinimumWidth * dpi / 96, PerfMinimumHeight * dpi / 96)
+                    : new Size(BaseMinimumWidth * dpi / 96, BaseMinimumHeight * dpi / 96);
                 GC.KeepAlive(restore);
 
                 m.Result = IntPtr.Zero;
@@ -1326,8 +1409,8 @@ namespace MicMonitor
             {
                 case "ready":
                     bridgeReady = true;
+                    ApplyPerformanceMode();
                     PushState();
-                    meterTimer.Start();
                     break;
 
                 case "window":
@@ -1397,6 +1480,13 @@ namespace MicMonitor
 
                 case "resetPeak":
                     engine.ResetCounters();
+                    break;
+
+                case "perfMode":
+                    settings.PerformanceMode = Convert.ToBoolean(message["value"]);
+                    ApplyPerformanceMode();
+                    Persist();
+                    PushState();
                     break;
 
                 case "toggle":
@@ -1483,6 +1573,7 @@ namespace MicMonitor
             b.Append(",\"autostart\":").Append(settings.AutoStartMonitoring ? "true" : "false");
             b.Append(",\"startup\":").Append(WindowsStartup.IsEnabled() ? "true" : "false");
             b.Append(",\"muted\":").Append(engine.Muted ? "true" : "false");
+            b.Append(",\"perf\":").Append(settings.PerformanceMode ? "true" : "false");
             b.Append(",\"dropouts\":").Append(engine.Dropouts);
 
             b.Append(",\"inRate\":").Append(engine.IsRunning ? engine.InputSampleRate : 0);
@@ -1514,7 +1605,8 @@ namespace MicMonitor
                 if (i > 0) b.Append(',');
                 b.Append("{\"id\":").Append(JsonString(devices[i].Id));
                 b.Append(",\"name\":").Append(JsonString(devices[i].Name));
-                b.Append(",\"def\":").Append(devices[i].IsDefault ? "true" : "false").Append('}');
+                b.Append(",\"def\":").Append(devices[i].IsDefault ? "true" : "false");
+                b.Append(",\"st\":").Append(JsonString(devices[i].StateLabel)).Append('}');
             }
             b.Append(']');
         }
@@ -1528,9 +1620,44 @@ namespace MicMonitor
             return false;
         }
 
+        /// <summary>
+        /// In performance mode the page shows no meters, so the whole analysis
+        /// path is switched off: no FFT, no telemetry, and a smaller window is
+        /// allowed. The audio path itself is untouched.
+        /// </summary>
+        private void ApplyPerformanceMode()
+        {
+            bool perf = settings.PerformanceMode;
+
+            engine.AnalysisEnabled = !perf;
+            meterTimer.Enabled = bridgeReady && !perf;
+
+            MinimumSize = ScaledMinimum();
+            if (perf && WindowState == FormWindowState.Normal)
+            {
+                normalBounds = Bounds;
+
+                // Just enough for the three cards that stay, clamped to the screen.
+                Rectangle work = Screen.FromControl(this).WorkingArea;
+                float scale;
+                using (Graphics g = CreateGraphics()) scale = g.DpiX / 96f;
+
+                Size = new Size(
+                    Math.Min((int)(PerfWidth * scale), work.Width - 40),
+                    Math.Min((int)(PerfHeight * scale), work.Height - 40));
+            }
+            else if (!perf && WindowState == FormWindowState.Normal && !normalBounds.IsEmpty)
+            {
+                Size = normalBounds.Size;
+                normalBounds = Rectangle.Empty;
+            }
+        }
+
+        private Rectangle normalBounds = Rectangle.Empty;
+
         private void OnMeterTick(object sender, EventArgs e)
         {
-            if (!bridgeReady) return;
+            if (!bridgeReady || settings.PerformanceMode) return;
 
             double peakLeft, peakRight, rms, correlation, floor;
             engine.Meter.Read(out peakLeft, out peakRight, out rms, out correlation, out floor);
@@ -1617,14 +1744,24 @@ namespace MicMonitor
                     defaultOutputId = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia).ID;
                 }
 
-                foreach (MMDevice device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
+                // Not just Active: a microphone that Windows considers disabled or
+                // unplugged still has to appear, otherwise it looks like the app
+                // cannot see the device at all.
+                const DeviceState Listed = DeviceState.Active | DeviceState.Disabled | DeviceState.Unplugged;
+
+                foreach (MMDevice device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, Listed))
                 {
-                    inputs.Add(new DeviceItem(device.ID, device.FriendlyName, device.ID == defaultInputId));
+                    inputs.Add(new DeviceItem(device.ID, device.FriendlyName,
+                        device.ID == defaultInputId, device.State));
                 }
-                foreach (MMDevice device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+                foreach (MMDevice device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, Listed))
                 {
-                    outputs.Add(new DeviceItem(device.ID, device.FriendlyName, device.ID == defaultOutputId));
+                    outputs.Add(new DeviceItem(device.ID, device.FriendlyName,
+                        device.ID == defaultOutputId, device.State));
                 }
+
+                inputs.Sort(CompareDevices);
+                outputs.Sort(CompareDevices);
             }
             catch (Exception ex)
             {
@@ -1634,8 +1771,22 @@ namespace MicMonitor
             inputDevices = inputs;
             outputDevices = outputs;
 
+            string privacy = MicrophonePrivacy.Blocked();
+            if (privacy != null) statusMessage = privacy;
+            else if (inputs.Count == 0) statusMessage = "Nessun microfono rilevato da Windows";
+            else statusMessage = string.Format(CultureInfo.InvariantCulture,
+                "{0} microfoni · {1} uscite", inputs.Count, outputs.Count);
+
             selectedInputId = PickDevice(inputs, selectedInputId ?? settings.InputDeviceId, defaultInputId);
             selectedOutputId = PickDevice(outputs, selectedOutputId ?? settings.OutputDeviceId, defaultOutputId);
+        }
+
+        /// <summary>Usable devices first, then the default one, then by name.</summary>
+        private static int CompareDevices(DeviceItem a, DeviceItem b)
+        {
+            if (a.IsUsable != b.IsUsable) return a.IsUsable ? -1 : 1;
+            if (a.IsDefault != b.IsDefault) return a.IsDefault ? -1 : 1;
+            return string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase);
         }
 
         private static string PickDevice(List<DeviceItem> devices, string preferred, string fallback)
@@ -1655,7 +1806,20 @@ namespace MicMonitor
                     if (device.Id == fallback) return fallback;
                 }
             }
+            foreach (DeviceItem device in devices)
+            {
+                if (device.IsUsable) return device.Id;
+            }
             return devices[0].Id;
+        }
+
+        private DeviceItem FindDevice(List<DeviceItem> devices, string id)
+        {
+            foreach (DeviceItem device in devices)
+            {
+                if (device.Id == id) return device;
+            }
+            return null;
         }
 
         private void TogglePower()
@@ -1672,6 +1836,25 @@ namespace MicMonitor
                 return;
             }
 
+            DeviceItem input = FindDevice(inputDevices, selectedInputId);
+            DeviceItem output = FindDevice(outputDevices, selectedOutputId);
+
+            if (input != null && !input.IsUsable)
+            {
+                statusMessage = "Microfono " + input.StateLabel;
+                PushState();
+                Toast("Questo microfono è " + input.StateLabel +
+                      ". Riattivalo in Impostazioni di Windows > Sistema > Audio, poi premi RE-SYNC I/O.", true);
+                return;
+            }
+            if (output != null && !output.IsUsable)
+            {
+                statusMessage = "Uscita " + output.StateLabel;
+                PushState();
+                Toast("Questa uscita è " + output.StateLabel + ". Riattivala in Windows, poi premi RE-SYNC I/O.", true);
+                return;
+            }
+
             try
             {
                 engine.Start(selectedInputId, selectedOutputId, settings.Latency,
@@ -1680,9 +1863,14 @@ namespace MicMonitor
             catch (Exception ex)
             {
                 engine.Stop();
-                statusMessage = "Errore: " + ex.Message;
+
+                // The usual reason a capture device refuses to open.
+                string privacy = MicrophonePrivacy.Blocked();
+                string reason = privacy ?? ex.Message;
+
+                statusMessage = "Errore: " + reason;
                 PushState();
-                Toast(ex.Message, true);
+                Toast(reason, true);
                 return;
             }
 

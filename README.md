@@ -44,10 +44,27 @@ Scarica lo zip dalla pagina [Releases](../../releases), poi:
 | Latenza & buffer | Preset 5 / 10 / 25 / 50 ms più regolazione fine 5–120 ms. Cambiarla ricrea i client WASAPI. |
 | Noise gate | Soglia −70 … −25 dB, attacco 3 ms, rilascio 120 ms. La riduzione applicata è mostrata in tempo reale. |
 | Limiter | Limitatore soft sui picchi al posto del taglio netto. |
+| Modalità prestazioni | Riduce l'app a microfono, uscita e livello di ascolto. Vedi sotto. |
 | Re-sync I/O | Rilegge l'elenco dei dispositivi audio. |
 | Avvio con Windows | Voce in `HKCU\...\Run`, parte direttamente nell'area di notifica. |
 | System tray | Chiudendo con la X l'ascolto continua in background invece di uscire. |
 | Avvia ascolto all'apertura | Fa partire il passthrough da solo. |
+
+### Modalità prestazioni
+
+![Modalità prestazioni](design/screenshot-prestazioni.png)
+
+Il secondo tab in alto riduce l'app all'essenziale: **microfono, uscita, livello di ascolto**.
+Non è solo una questione di ingombro a schermo — spariscono anche i calcoli:
+
+- il callback di acquisizione smette di misurare picco, RMS e correlazione campione per campione
+  e di riempire la finestra scorrevole della FFT;
+- l'host smette di inviare telemetria alla pagina (30 messaggi al secondo in meno);
+- la pagina smette di ridisegnare spettro e VU meter a ogni frame, quindi si ferma anche il lavoro della GPU.
+
+Il percorso audio non cambia di una virgola: stessa latenza, stesso guadagno, stesso gate.
+La finestra si rimpicciolisce da sola e può scendere fino a 620×470; tornando al monitoraggio
+completo riprende la dimensione di prima. La scelta resta memorizzata tra le sessioni.
 
 ### Strumenti di misura
 
@@ -57,6 +74,18 @@ Tutti alimentati dal segnale reale del microfono, misurato **prima** del guadagn
 - **VU stereo** — picco per canale, RMS, peak-hold, correlazione di fase L/R e stima del rumore di fondo.
 - **Carico DSP** — tempo speso nel callback di acquisizione rapportato alla durata del buffer.
 - **Interruzioni** — quante volte la coda è stata svuotata per deriva tra i clock dei due dispositivi.
+
+## Se il microfono non compare nell'elenco
+
+L'app elenca i dispositivi **attivi, disattivati e scollegati**, non solo quelli attivi: un
+microfono spento in Windows resta visibile, marcato con il motivo per cui non si può usare.
+Provando ad avviarlo l'app dice cosa sistemare invece di limitarsi a fallire.
+
+Controlla anche i permessi: se l'accesso al microfono è negato in *Impostazioni > Privacy e
+sicurezza > Microfono* — sia a livello di sistema, sia la voce **"Consenti alle app desktop di
+accedere al microfono"** — l'app lo rileva e lo scrive nella barra di stato.
+
+In fondo a destra trovi sempre quanti dispositivi sono stati trovati.
 
 ## Finestra
 
