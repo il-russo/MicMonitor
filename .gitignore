@@ -17,3 +17,6 @@ build/WebViewProbe.exe
 build/probe.log
 build/Microsoft.Web.WebView2.*.dll
 build/WebView2Loader.dll
+
+# copia dell'icona usata dal collegamento locale
+MicFlow.ico
