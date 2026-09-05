@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mic Monitor — Skin Spec v2 · RACK UNIT</title>
+<style>
+:root{
+  --chassis-0:#0B0D10;
+  --chassis-1:#14171B;
+  --panel:#1A1E23;
+  --panel-hi:#232830;
+  --engrave:#080A0C;
+  --edge:#2E353E;
+  --edge-hi:#3C4552;
+  --text:#E6EAF0;
+  --dim:#7C8593;
+  --faint:#4C5561;
+  --teal:#00E5C0;
+  --teal-lo:#0A8C7A;
+  --lime:#9BE855;
+  --amber:#FFB020;
+  --red:#FF4D4D;
+  --mono:"Cascadia Mono","Consolas","SFMono-Regular",monospace;
+  --display:"Bahnschrift","DIN Alternate","Segoe UI Semibold",sans-serif;
+  --body:"Segoe UI","Selawik",sans-serif;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+
+html{scroll-behavior:smooth}
+
+body{
+  background:
+    radial-gradient(1200px 700px at 50% -10%, #1B2027 0%, transparent 60%),
+    linear-gradient(180deg,var(--chassis-0),#07090B 100%);
+  color:var(--text);
+  font-family:var(--body);
+  min-height:100vh;
+  padding:0 24px 100px;
+  overflow-x:hidden;
+}
+
+/* fine grain over everything */
+body::after{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:99;opacity:.05;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.wrap{max-width:1180px;margin:0 auto}
+
+/* ---------- masthead ---------- */
+.masthead{
+  padding:70px 0 46px;
+  display:grid;grid-template-columns:1fr auto;align-items:end;gap:24px;
+  border-bottom:1px solid var(--edge);
+}
+.kicker{
+  font-family:var(--mono);font-size:11px;letter-spacing:.34em;color:var(--teal);
+  text-transform:uppercase;margin-bottom:16px;
+  animation:fade .7s both;
+}
+h1{
+  font-family:var(--display);font-weight:600;font-stretch:condensed;
+  font-size:clamp(44px,8vw,104px);line-height:.86;letter-spacing:-.02em;
+  text-transform:uppercase;
+  animation:fade .7s .06s both;
+}
+h1 em{font-style:normal;color:var(--faint)}
+.masthead p{
+  font-family:var(--mono);font-size:11px;line-height:1.9;color:var(--dim);
+  text-align:right;max-width:270px;animation:fade .7s .12s both;
+}
+.masthead p b{color:var(--text);font-weight:400}
+
+@keyframes fade{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+
+/* ---------- section chrome ---------- */
+section{padding:64px 0 0}
+.sec-head{display:flex;align-items:baseline;gap:16px;margin-bottom:28px}
+.sec-num{font-family:var(--mono);font-size:11px;color:var(--teal);letter-spacing:.2em}
+.sec-title{
+  font-family:var(--display);font-stretch:condensed;font-weight:600;
+  font-size:22px;letter-spacing:.12em;text-transform:uppercase;
+}
+.sec-rule{flex:1;height:1px;background:linear-gradient(90deg,var(--edge),transparent)}
+
+/* ---------- the app mockup ---------- */
+.stage{
+  display:grid;grid-template-columns:auto 1fr;gap:56px;align-items:start;
+  padding:56px 0 0;
+}
+@media(max-width:900px){.stage{grid-template-columns:1fr}}
+
+.chassis{
+  width:474px;border-radius:14px;position:relative;
+  background:linear-gradient(180deg,#20252C 0%,#171B21 12%,#14181D 100%);
+  box-shadow:
+    0 0 0 1px #333B46,
+    0 1px 0 0 rgba(255,255,255,.06) inset,
+    0 40px 90px -20px #000,
+    0 0 120px -40px rgba(0,229,192,.25);
+  overflow:hidden;
+  animation:fade .8s .2s both;
+}
+/* brushed-metal streaks */
+.chassis::before{
+  content:"";position:absolute;inset:0;pointer-events:none;opacity:.35;
+  background:repeating-linear-gradient(90deg,rgba(255,255,255,.014) 0 1px,transparent 1px 3px);
+}
+
+/* title bar */
+.titlebar{
+  height:38px;display:flex;align-items:center;gap:10px;padding:0 8px 0 14px;
+  background:linear-gradient(180deg,#252B33,#1B2027);
+  border-bottom:1px solid #0B0E11;
+  box-shadow:0 1px 0 rgba(255,255,255,.045) inset;
+}
+.tb-dot{width:9px;height:9px;border-radius:50%;background:var(--teal);
+  box-shadow:0 0 8px var(--teal),0 0 2px #fff inset}
+.tb-title{font-family:var(--display);font-stretch:condensed;font-size:13px;
+  letter-spacing:.2em;text-transform:uppercase;color:#AEB7C4}
+.tb-spacer{flex:1}
+.tb-btn{width:34px;height:26px;display:grid;place-items:center;border-radius:5px;color:#6D7784}
+.tb-btn svg{display:block}
+.tb-btn.close:hover{background:#3A1A1F;color:var(--red)}
+.tb-btn:hover{background:#262C34;color:var(--text)}
+
+/* engraved brand row */
+.brand{
+  padding:18px 20px 16px;display:flex;align-items:center;gap:13px;
+  border-bottom:1px solid #0C0F12;box-shadow:0 1px 0 rgba(255,255,255,.035);
+}
+.brand-mark{
+  width:34px;height:34px;border-radius:9px;display:grid;place-items:center;flex:none;
+  background:linear-gradient(160deg,#0F3D36,#0A1A19);
+  box-shadow:0 0 0 1px #1D5B51,0 0 18px -4px var(--teal) inset;
+  color:var(--teal);
+}
+.brand-txt h2{
+  font-family:var(--display);font-stretch:condensed;font-weight:600;font-size:19px;
+  letter-spacing:.16em;text-transform:uppercase;line-height:1;
+  color:#EDF1F6;text-shadow:0 1px 0 #000,0 -1px 0 rgba(255,255,255,.07);
+}
+.brand-txt span{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;color:var(--faint);
+  text-transform:uppercase;display:block;margin-top:5px}
+
+/* recessed panel */
+.panel{
+  margin:14px;padding:14px 14px 16px;border-radius:9px;
+  background:linear-gradient(180deg,#15191E,#191E24);
+  box-shadow:0 0 0 1px #0A0D10, 0 0 0 2px #262C34, 0 6px 14px -8px #000 inset;
+}
+.panel + .panel{margin-top:0}
+.panel-label{
+  font-family:var(--mono);font-size:9px;letter-spacing:.26em;text-transform:uppercase;
+  color:var(--teal-lo);display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;
+}
+.panel-label .act{color:var(--faint);letter-spacing:.14em;cursor:pointer}
+.panel-label .act:hover{color:var(--text)}
+
+/* device selector */
+.field{margin-bottom:11px}
+.field:last-child{margin-bottom:0}
+.field-name{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;color:var(--dim);
+  text-transform:uppercase;margin-bottom:6px;display:flex;gap:7px;align-items:center}
+.select{
+  height:32px;border-radius:6px;display:flex;align-items:center;gap:9px;padding:0 10px;
+  background:linear-gradient(180deg,#0E1114,#141820);
+  box-shadow:0 0 0 1px #2B323B, 0 1px 0 rgba(255,255,255,.03);
+  font-size:12.5px;color:#D3DAE4;cursor:pointer;
+}
+.select:hover{box-shadow:0 0 0 1px var(--teal-lo),0 0 14px -6px var(--teal)}
+.select .ico{color:var(--teal-lo);display:grid;place-items:center;flex:none}
+.select .val{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.select .tag{font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;color:var(--faint);
+  border:1px solid #2B323B;border-radius:3px;padding:2px 5px;flex:none}
+.select .caret{color:var(--faint);flex:none}
+
+/* sliders */
+.ctl{margin-bottom:15px}
+.ctl:last-child{margin-bottom:2px}
+.ctl-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:9px}
+.ctl-name{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--dim);text-transform:uppercase}
+.readout{
+  font-family:var(--mono);font-size:12px;color:var(--text);
+  background:#0B0E11;border-radius:4px;padding:2px 8px;
+  box-shadow:0 0 0 1px #262C34;letter-spacing:.04em;
+}
+.readout.off{color:var(--faint)}
+.track{
+  height:6px;border-radius:3px;position:relative;
+  background:linear-gradient(180deg,#0A0C0F,#101419);
+  box-shadow:0 0 0 1px #262C34 inset;
+}
+.fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;
+  background:linear-gradient(90deg,var(--teal-lo),var(--teal));
+  box-shadow:0 0 12px -2px var(--teal);}
+.thumb{
+  position:absolute;top:50%;width:16px;height:16px;border-radius:50%;transform:translate(-50%,-50%);
+  background:linear-gradient(180deg,#F2F6FA,#B9C3CF);
+  box-shadow:0 0 0 1px #0A0C0F,0 2px 5px #000,0 0 0 4px rgba(0,229,192,.10);
+}
+.thumb::after{content:"";position:absolute;inset:5px;border-radius:50%;
+  background:repeating-linear-gradient(90deg,#8C97A5 0 1px,transparent 1px 2px)}
+
+/* meter */
+.meter{display:flex;gap:2px;height:26px;align-items:stretch}
+.seg{flex:1;border-radius:2px;background:#0F1317;box-shadow:0 0 0 1px #1C2128 inset}
+.seg.on{box-shadow:none}
+.scale{display:flex;justify-content:space-between;margin-top:7px;
+  font-family:var(--mono);font-size:8px;letter-spacing:.1em;color:var(--faint)}
+
+/* main action */
+.action{padding:2px 14px 14px}
+.power{
+  height:52px;border-radius:9px;display:flex;align-items:center;justify-content:center;gap:11px;
+  font-family:var(--display);font-stretch:condensed;font-weight:600;font-size:17px;
+  letter-spacing:.22em;text-transform:uppercase;cursor:pointer;
+  background:linear-gradient(180deg,#00F5CE,#00B99C);color:#04231E;
+  box-shadow:0 0 0 1px #00FFDA inset,0 8px 26px -10px var(--teal),0 2px 0 #005F51;
+  transition:transform .12s ease, box-shadow .2s ease;
+}
+.power:hover{transform:translateY(-1px);box-shadow:0 0 0 1px #6BFFE6 inset,0 12px 34px -10px var(--teal),0 2px 0 #005F51}
+.power:active{transform:translateY(1px)}
+.power.stop{background:linear-gradient(180deg,#FF6B6B,#D93A3A);color:#2B0A0C;
+  box-shadow:0 0 0 1px #FF8F8F inset,0 8px 26px -10px var(--red),0 2px 0 #7A1E1E}
+
+/* status strip */
+.status{
+  display:flex;align-items:center;gap:9px;padding:0 16px 12px;
+  font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--dim);
+}
+.led{width:7px;height:7px;border-radius:50%;background:var(--teal);flex:none;
+  box-shadow:0 0 9px var(--teal);animation:blink 2.4s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.45}}
+
+/* footer switches */
+.switches{
+  display:flex;justify-content:space-between;gap:12px;padding:12px 16px 16px;
+  border-top:1px solid #0C0F12;box-shadow:0 -1px 0 rgba(255,255,255,.03);
+}
+.sw{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:9.5px;
+  letter-spacing:.08em;color:var(--dim);text-transform:uppercase;cursor:pointer}
+.sw-box{
+  width:30px;height:16px;border-radius:8px;position:relative;flex:none;
+  background:#0B0E11;box-shadow:0 0 0 1px #2B323B inset;transition:.2s;
+}
+.sw-box i{position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;
+  background:#4A535F;transition:.2s}
+.sw.on .sw-box{background:#063A33;box-shadow:0 0 0 1px var(--teal-lo) inset}
+.sw.on .sw-box i{left:16px;background:var(--teal);box-shadow:0 0 8px var(--teal)}
+
+/* ---------- spec column ---------- */
+.specs{display:flex;flex-direction:column;gap:34px;padding-top:6px;animation:fade .8s .3s both}
+.spec h3{
+  font-family:var(--display);font-stretch:condensed;font-weight:600;font-size:15px;
+  letter-spacing:.16em;text-transform:uppercase;margin-bottom:14px;color:#C9D2DE;
+}
+.spec p{font-size:13.5px;line-height:1.72;color:var(--dim);max-width:52ch}
+.spec p + p{margin-top:11px}
+.spec b{color:var(--text);font-weight:600}
+
+.swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:10px}
+.sw-card{border-radius:8px;overflow:hidden;box-shadow:0 0 0 1px var(--edge)}
+.sw-chip{height:52px}
+.sw-meta{padding:8px 9px;background:var(--panel);font-family:var(--mono);font-size:9px;
+  letter-spacing:.06em;color:var(--dim);line-height:1.6}
+.sw-meta b{display:block;color:var(--text);font-weight:400;letter-spacing:.1em;text-transform:uppercase;font-size:8.5px}
+
+.type-row{display:flex;align-items:baseline;gap:18px;padding:14px 0;border-bottom:1px solid #1E242B}
+.type-row:last-child{border-bottom:0}
+.type-tag{font-family:var(--mono);font-size:9px;letter-spacing:.16em;color:var(--faint);
+  text-transform:uppercase;width:96px;flex:none}
+.type-demo{flex:1}
+.t-display{font-family:var(--display);font-stretch:condensed;font-weight:600;font-size:27px;
+  letter-spacing:.14em;text-transform:uppercase}
+.t-mono{font-family:var(--mono);font-size:14px;letter-spacing:.08em;color:#C9D2DE}
+.t-body{font-family:var(--body);font-size:14px;color:#C9D2DE}
+
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+.note{
+  border-left:2px solid var(--teal-lo);padding:2px 0 2px 16px;
+  font-size:13.5px;line-height:1.7;color:var(--dim);
+}
+.note b{color:var(--teal)}
+
+footer{
+  margin-top:80px;padding-top:26px;border-top:1px solid var(--edge);
+  display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--faint);text-transform:uppercase;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div>
+      <div class="kicker">Skin spec · v2 · rack unit</div>
+      <h1>Mic<br>Monitor<em>.</em></h1>
+    </div>
+    <p>
+      Linguaggio visivo per l'app Windows.<br>
+      <b>Aesthetic:</b> hardware audio da rack.<br>
+      <b>Vincolo:</b> tutto disegnabile in GDI+.<br>
+      <b>Font:</b> gia' presenti in Windows 11.
+    </p>
+  </header>
+
+  <!-- ============ THE MOCKUP ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">01</span>
+      <span class="sec-title">La finestra</span>
+      <span class="sec-rule"></span>
+    </div>
+
+    <div class="stage">
+
+      <div class="chassis">
+        <!-- title bar -->
+        <div class="titlebar">
+          <span class="tb-dot"></span>
+          <span class="tb-title">Mic Monitor</span>
+          <span class="tb-spacer"></span>
+          <span class="tb-btn"><svg width="11" height="11" viewBox="0 0 11 11"><path d="M1 5.5h9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></span>
+          <span class="tb-btn close"><svg width="11" height="11" viewBox="0 0 11 11"><path d="M1.6 1.6l7.8 7.8M9.4 1.6l-7.8 7.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></span>
+        </div>
+
+        <!-- brand -->
+        <div class="brand">
+          <span class="brand-mark">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <rect x="9" y="2" width="6" height="12" rx="3" fill="currentColor" stroke="none"/>
+              <path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3M8.5 21h7"/>
+            </svg>
+          </span>
+          <span class="brand-txt">
+            <h2>Mic Monitor</h2>
+            <span>Direct monitoring · no virtual driver</span>
+          </span>
+        </div>
+
+        <!-- routing -->
+        <div class="panel">
+          <div class="panel-label"><span>Routing</span><span class="act">rescan</span></div>
+
+          <div class="field">
+            <div class="field-name">Source</div>
+            <div class="select">
+              <span class="ico"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></span>
+              <span class="val">Microfono (TONOR TC320 USB Mic)</span>
+              <span class="tag">DEF</span>
+              <span class="caret"><svg width="9" height="9" viewBox="0 0 10 10"><path d="M1 3.2L5 7l4-3.8" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg></span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-name">Destination · usa le cuffie</div>
+            <div class="select">
+              <span class="ico"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="2" y="14" width="5" height="7" rx="2"/><rect x="17" y="14" width="5" height="7" rx="2"/></svg></span>
+              <span class="val">Auricolare (G435 Wireless Gaming Headset)</span>
+              <span class="tag">DEF</span>
+              <span class="caret"><svg width="9" height="9" viewBox="0 0 10 10"><path d="M1 3.2L5 7l4-3.8" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- controls -->
+        <div class="panel">
+          <div class="panel-label"><span>Signal</span><span class="act">48 kHz · 2 ch</span></div>
+
+          <div class="ctl">
+            <div class="ctl-top"><span class="ctl-name">Monitor level</span><span class="readout">100 %</span></div>
+            <div class="track"><div class="fill" style="width:50%"></div><div class="thumb" style="left:50%"></div></div>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-top"><span class="ctl-name">Latency</span><span class="readout">25 ms</span></div>
+            <div class="track"><div class="fill" style="width:17%"></div><div class="thumb" style="left:17%"></div></div>
+          </div>
+
+          <div class="ctl">
+            <div class="ctl-top"><span class="ctl-name">Noise gate</span><span class="readout off">OFF</span></div>
+            <div class="track"><div class="fill" style="width:0"></div><div class="thumb" style="left:0"></div></div>
+          </div>
+        </div>
+
+        <!-- meter -->
+        <div class="panel">
+          <div class="panel-label"><span>Input level</span><span class="act">peak hold</span></div>
+          <div class="meter" id="meter"></div>
+          <div class="scale"><span>-60</span><span>-40</span><span>-24</span><span>-12</span><span>-6</span><span>0 dB</span></div>
+        </div>
+
+        <!-- action -->
+        <div class="action">
+          <div class="power stop">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
+            Ferma ascolto
+          </div>
+        </div>
+
+        <div class="status"><span class="led"></span> IN ASCOLTO · 48 kHz 2 ch → 48 kHz 2 ch · buffer 25 ms</div>
+
+        <div class="switches">
+          <span class="sw on"><span class="sw-box"><i></i></span> Auto-start</span>
+          <span class="sw"><span class="sw-box"><i></i></span> Avvio con Windows</span>
+        </div>
+      </div>
+
+      <div class="specs">
+        <div class="spec">
+          <h3>Concept</h3>
+          <p>L'app e' un <b>pezzo di hardware audio</b>, non una finestra di Windows. Chassis in grafite con
+             venature verticali, pannelli <b>incassati</b> (bordo scuro esterno + bordo chiaro interno), testo
+             inciso, LED di segnale.</p>
+          <p>Il colore vive quasi solo nel percorso del segnale: <b>teal</b> quando l'audio passa,
+             <b>rosso</b> per fermare, ambra e rosso solo in cima al meter. Tutto il resto e' grafite e grigio.</p>
+        </div>
+
+        <div class="spec">
+          <h3>Regole di rilievo</h3>
+          <p><b>Incassato</b> (pannelli, track degli slider, readout): gradiente dal piu' scuro in alto,
+             bordo esterno <code>#0A0D10</code>, bordo interno <code>#262C34</code>.</p>
+          <p><b>In rilievo</b> (title bar, pulsante power, thumb): gradiente dal piu' chiaro in alto e
+             1 px di luce sul bordo superiore.</p>
+        </div>
+
+        <div class="spec">
+          <h3>Il meter e' l'eroe</h3>
+          <p>24 segmenti, angoli 2 px, gap 2 px. Colore per posizione, non per livello: teal fino al 60 %,
+             lime fino al 78 %, ambra fino al 92 %, rosso sopra. Il picco resta acceso ~1 s e poi scende.
+             Sotto, la scala in dB incisa in mono 8 px.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PALETTE ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">02</span>
+      <span class="sec-title">Palette</span>
+      <span class="sec-rule"></span>
+    </div>
+    <div class="swatches" id="swatches"></div>
+  </section>
+
+  <!-- ============ TYPE ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">03</span>
+      <span class="sec-title">Tipografia</span>
+      <span class="sec-rule"></span>
+    </div>
+    <div class="type-row">
+      <span class="type-tag">Display</span>
+      <span class="type-demo"><span class="t-display">Mic Monitor</span>
+        <div class="t-mono" style="margin-top:6px;color:var(--faint);font-size:10px">Bahnschrift Condensed SemiBold · titoli, pulsante power · tracking .16em</div></span>
+    </div>
+    <div class="type-row">
+      <span class="type-tag">Readout</span>
+      <span class="type-demo"><span class="t-mono">100 % · 25 ms · −48 dB · 48 kHz</span>
+        <div class="t-mono" style="margin-top:6px;color:var(--faint);font-size:10px">Cascadia Mono / Consolas · etichette, numeri, stato</div></span>
+    </div>
+    <div class="type-row">
+      <span class="type-tag">Interfaccia</span>
+      <span class="type-demo"><span class="t-body">Microfono (TONOR TC320 USB Mic)</span>
+        <div class="t-mono" style="margin-top:6px;color:var(--faint);font-size:10px">Segoe UI · solo nomi dispositivo e testi lunghi</div></span>
+    </div>
+  </section>
+
+  <!-- ============ STATES ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">04</span>
+      <span class="sec-title">Stati del pulsante</span>
+      <span class="sec-rule"></span>
+    </div>
+    <div class="grid2">
+      <div>
+        <div class="power" style="margin-bottom:10px">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 4v8"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg>
+          Avvia ascolto
+        </div>
+        <div class="note"><b>Idle.</b> Gradiente teal, alone morbido sotto, 2 px di zoccolo scuro. Hover: sale di 1 px.</div>
+      </div>
+      <div>
+        <div class="power stop" style="margin-bottom:10px">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
+          Ferma ascolto
+        </div>
+        <div class="note"><b>Attivo.</b> Stessa geometria in rosso: cambia il colore, mai la posizione, cosi' il click resta muscolare.</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Mic Monitor · skin spec v2</span>
+    <span>WinForms + GDI+ · nessuna dipendenza esterna</span>
+  </footer>
+</div>
+
+<script>
+// meter: 24 segments, colour by position, animated peak
+const COUNT = 24, meter = document.getElementById('meter');
+const segs = [];
+for (let i = 0; i < COUNT; i++) {
+  const s = document.createElement('span');
+  s.className = 'seg';
+  meter.appendChild(s);
+  segs.push(s);
+}
+function colourAt(i) {
+  const p = i / COUNT;
+  if (p > 0.92) return ['#FF4D4D', 'rgba(255,77,77,.55)'];
+  if (p > 0.78) return ['#FFB020', 'rgba(255,176,32,.5)'];
+  if (p > 0.60) return ['#9BE855', 'rgba(155,232,85,.45)'];
+  return ['#00E5C0', 'rgba(0,229,192,.45)'];
+}
+let level = 0.4, peak = 0.4, hold = 0;
+setInterval(() => {
+  const target = 0.30 + Math.random() * 0.55;
+  level += (target - level) * 0.4;
+  if (level >= peak) { peak = level; hold = 14; }
+  else if (hold > 0) hold--;
+  else peak = Math.max(level, peak - 0.02);
+
+  const lit = Math.round(level * COUNT), pk = Math.round(peak * COUNT) - 1;
+  segs.forEach((s, i) => {
+    const [c, glow] = colourAt(i);
+    if (i < lit) { s.style.background = c; s.style.boxShadow = '0 0 8px ' + glow; s.className = 'seg on'; }
+    else if (i === pk) { s.style.background = 'rgba(255,255,255,.28)'; s.style.boxShadow = 'none'; s.className = 'seg on'; }
+    else { s.style.background = ''; s.style.boxShadow = ''; s.className = 'seg'; }
+  });
+}, 90);
+
+// palette cards
+const PALETTE = [
+  ['Chassis', '#14171B', 'sfondo finestra'],
+  ['Panel', '#1A1E23', 'pannelli incassati'],
+  ['Well', '#0B0E11', 'track e readout'],
+  ['Edge', '#2E353E', 'bordo interno'],
+  ['Text', '#E6EAF0', 'testo primario'],
+  ['Dim', '#7C8593', 'etichette'],
+  ['Faint', '#4C5561', 'testo terziario'],
+  ['Teal', '#00E5C0', 'segnale attivo'],
+  ['Teal low', '#0A8C7A', 'accenti incisi'],
+  ['Lime', '#9BE855', 'meter medio'],
+  ['Amber', '#FFB020', 'meter alto'],
+  ['Red', '#FF4D4D', 'stop e clip']
+];
+document.getElementById('swatches').innerHTML = PALETTE.map(([n, hex, use]) => `
+  <div class="sw-card">
+    <div class="sw-chip" style="background:${hex}"></div>
+    <div class="sw-meta"><b>${n}</b>${hex}<br>${use}</div>
+  </div>`).join('');
+</script>
+</body>
+</html>

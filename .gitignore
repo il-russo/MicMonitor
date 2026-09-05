@@ -1,0 +1,11 @@
+# Build output
+MicMonitor.exe
+*.pdb
+
+# NAudio is fetched at build time by build/fetch-naudio.ps1
+build/naudio/
+build/*.zip
+
+# Local test binaries
+build/EngineTest.exe
+build/NAudio.dll
